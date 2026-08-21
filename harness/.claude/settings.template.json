@@ -1,0 +1,321 @@
+{
+  "_ratchet": {
+    "harness": "Ratchet",
+    "version": "{{RATCHET_VERSION}}",
+    "project_name": "{{RATCHET_PROJECT_NAME}}",
+    "project_dir": "{{RATCHET_PROJECT_DIR}}",
+    "stack": "{{RATCHET_STACK_NAME}}",
+    "domain": "{{RATCHET_DOMAIN_NAME}}",
+    "base_branch": "{{RATCHET_BASE_BRANCH}}",
+    "escalation_mode": "{{RATCHET_ESCALATION_MODE}}",
+    "generated_by": "install.sh from .claude/settings.template.json",
+    "generated_at": "{{RATCHET_GENERATED_AT}}",
+    "_warning": "This file is GENERATED and is a never-escalatable control-set member. Do not hand-edit for permanent change: edit settings.template.json in the Ratchet source and re-run install.sh, or the file will be overwritten on upgrade. The agent cannot write it at all (deny below + guard.sh rule control-layer)."
+  },
+
+  "_ratchet_permission_doctrine": "READ THIS BEFORE 'FIXING' ANYTHING IN allow[]. The allow list is not a list of things we consider safe. It is the AVAILABILITY SURFACE for unattended operation. Under defaultMode=acceptEdits an unlisted Bash command raises an interactive PERMISSION PROMPT, and a prompt in an unattended run is an indefinite stall that is indistinguishable, from the outside, from an agent that is working. So several commands are deliberately ALLOWED here and then REFUSED by .claude/hooks/guard.sh. That is not a misconfiguration and it is not redundant with itself. It converts a silent stall into a loud, machine-readable refusal that carries an escalation id, which a human can lift for exactly one byte-exact call with .claude/hooks/approve.sh. Concretely: 'git config:*', 'git remote:*', inline interpreters ('python -c', 'node -e', 'perl -e'), deletions outside .pipeline/, compound git/gh forms, gh verbs outside the standing read surface, and writes under .claude/** that are not control-set files are ALL allowed here and ALL refused by guard.sh by default. If you remove them from allow[] the guard never runs, because the permission layer stalls first, and you have traded a refusal you can escalate for a prompt nobody is there to answer.",
+
+  "_ratchet_deny_partition": "THE DENY LIST IS PARTITIONED INTO THREE CLASSES AND THEY ARE NOT INTERCHANGEABLE. A settings deny CANNOT be conditionally lifted at runtime: deny beats ask and allow, no hook can override it, and the agent cannot edit this file. Therefore NOTHING that remains in deny[] is escalatable in-session, by design. (1) NEVER-ESCALATABLE (CONTRACT 5.6) - the control set (this file, settings.local.json, guard.sh, scope-guard.sh, hooklib.sh, escalation-lib.sh, approve.sh, ratchet.config.sh), secrets/keys/.env, force push and branch deletion, the governing corpus (.context/CLAUDE.md PIPELINE.md CONVENTIONS.md SPEC.md MILESTONES.md and the root CLAUDE.md), the domain's forbidden artifacts, and the domain's banned-read files. These are denied HERE and refused AGAIN in guard.sh/scope-guard.sh - two layers on purpose. No approval lifts them; a run that needs one has hit a Hard Stop and a HUMAN acts. Making them approvable would convert the never class into 'never unless someone clicks yes', which is the exact compromise the contract forbids, and it would let the files that DECIDE what an approval means be changed by an approval. (2) ESCALATABLE, ALREADY HOOK-ENFORCED - delete-scope, git-compound, gh-surface. Not listed here at all; guard.sh owns them and prints an escalation id. (3) ESCALATABLE, ENFORCEMENT MOVED - git config/remote, inline interpreters, the non-control-set remainder of .claude/**, and the .context/ decision-log rollover. These are in allow[] precisely so the permission layer does not stall, and guard.sh refuses them until a byte-exact, single-use, TTL-bound, run-bound, HMAC-verified approval exists. That trades two enforcement layers for one on the moved set, and it is bounded by three things: content-hash binding (the human approves the resulting bytes, not the path), the control-layer postcondition (an approved .claude/ write that leaves the hook suite worse than baseline blocks the next tool call), and keeping the control set itself permanently out of the escalatable class.",
+
+  "_ratchet_note_decisions": "DECISIONS.md and .context/archive/decisions/** are deliberately NOT denied. The orchestrator must be able to append a decision entry, and CONTRACT 7.3 states that appending a decision must never be the failing action. Rollover (rewriting the hot file) is a different act and is refused by guard.sh under an escalatable rule id.",
+
+  "permissions": {
+    "defaultMode": "acceptEdits",
+
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "TodoWrite",
+      "Task",
+      "WebFetch",
+      "WebSearch",
+      "NotebookRead",
+
+      "Bash(ls:*)",
+      "Bash(pwd)",
+      "Bash(echo:*)",
+      "Bash(printf:*)",
+      "Bash(cat .pipeline/:*)",
+      "Bash(cat .agent-development/:*)",
+      "Bash(cat .context/:*)",
+      "Bash(cat docs/:*)",
+      "Bash(wc -l:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(diff:*)",
+      "Bash(mkdir -p .pipeline)",
+      "Bash(mkdir -p .pipeline:*)",
+      "Bash(mkdir -p .agent-development:*)",
+      "Bash(mkdir -p docs/evidence:*)",
+      "Bash(touch .pipeline/:*)",
+      "Bash(rm .pipeline/:*)",
+      "Bash(rm -f .pipeline/:*)",
+
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git switch:*)",
+      "Bash(git restore:*)",
+      "Bash(git stash:*)",
+      "Bash(git worktree:*)",
+      "Bash(git commit:*)",
+      "Bash(git fetch:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git describe:*)",
+      "Bash(git blame:*)",
+      "Bash(git checkout -b {{RATCHET_AGENT_BRANCH_PREFIX}}:*)",
+      "Bash(git push origin {{RATCHET_AGENT_BRANCH_PREFIX}}:*)",
+      "Bash(git push -u origin {{RATCHET_AGENT_BRANCH_PREFIX}}:*)",
+      "Bash(git push --set-upstream origin {{RATCHET_AGENT_BRANCH_PREFIX}}:*)",
+
+      "Bash(gh auth status)",
+      "Bash(gh repo view:*)",
+      "Bash(gh api:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr status:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+
+      "Bash(.claude/hooks/dispatch-baseline.sh:*)",
+      "Bash(.claude/hooks/checkpoint-evidence.sh:*)",
+      "Bash(.claude/hooks/gc-prune.sh:*)",
+      "Bash(.claude/hooks/escalate.sh:*)",
+      "Bash(.claude/hooks/pipeline-event.sh:*)",
+      "Bash(python .claude/hooks/check_done.py:*)",
+      "Bash(python3 .claude/hooks/check_done.py:*)",
+      "Bash(python .claude/hooks/check_narrative.py:*)",
+      "Bash(python3 .claude/hooks/check_narrative.py:*)",
+      "Bash(python .claude/hooks/proof_map.py:*)",
+      "Bash(python3 .claude/hooks/proof_map.py:*)",
+      "Bash(python .claude/hooks/run_metrics.py:*)",
+      "Bash(python3 .claude/hooks/run_metrics.py:*)",
+      "Bash(python .claude/hooks/test_hooks.py:*)",
+      "Bash(python3 .claude/hooks/test_hooks.py:*)",
+
+      "Read(./.pipeline/**)",
+      "Write(./.pipeline/**)",
+      "Edit(./.pipeline/**)",
+      "Read(./.agent-development/**)",
+      "Write(./.agent-development/**)",
+      "Edit(./.agent-development/**)",
+      "Read(./docs/**)",
+      "Write(./docs/evidence/**)",
+      "Edit(./docs/evidence/**)",
+      "Edit(./.context/DECISIONS.md)",
+      "Write(./.context/archive/decisions/**)",
+      "Edit(./.context/archive/decisions/**)",
+
+      "Bash(git config:*)",
+      "Bash(git remote:*)",
+      "Bash(python -c:*)",
+      "Bash(python3 -c:*)",
+      "Bash(node -e:*)",
+      "Bash(perl -e:*)",
+      "Write(./.claude/**)",
+      "Edit(./.claude/**)",
+
+      "{{RATCHET_STACK_ALLOW}}"
+    ],
+
+    "ask": [
+      "Bash(gh pr merge:*)",
+      "Bash(git push origin {{RATCHET_BASE_BRANCH}})",
+      "Bash(git push origin {{RATCHET_BASE_BRANCH}}:*)",
+      "Bash(git push origin HEAD:{{RATCHET_BASE_BRANCH}})",
+      "Bash(git push origin HEAD:{{RATCHET_BASE_BRANCH}}:*)",
+      "Bash(git merge:*)",
+      "{{RATCHET_DOMAIN_ASK}}"
+    ],
+
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push --delete:*)",
+      "Bash(git push --mirror:*)",
+      "Bash(git push --all:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(sudo:*)",
+      "Bash(chmod 777:*)",
+
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./{{RATCHET_SECRETS_DIR}}/**)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.p8)",
+      "Read(**/*.pfx)",
+      "Read(**/id_rsa)",
+      "Read(**/id_ed25519)",
+      "Edit(./.env)",
+      "Edit(./.env.*)",
+      "Write(./.env)",
+      "Write(./.env.*)",
+      "Edit(./secrets/**)",
+      "Write(./secrets/**)",
+      "Edit(./{{RATCHET_SECRETS_DIR}}/**)",
+      "Write(./{{RATCHET_SECRETS_DIR}}/**)",
+      "Edit(**/*.pem)",
+      "Write(**/*.pem)",
+      "Edit(**/*.key)",
+      "Write(**/*.key)",
+      "Edit(**/*.p8)",
+      "Write(**/*.p8)",
+      "Edit(**/*.pfx)",
+      "Write(**/*.pfx)",
+
+      "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.json)",
+      "Edit(./.claude/settings.local.json)",
+      "Write(./.claude/settings.local.json)",
+      "Edit(./.claude/settings.template.json)",
+      "Write(./.claude/settings.template.json)",
+      "Edit(./.claude/hooks/guard.sh)",
+      "Write(./.claude/hooks/guard.sh)",
+      "Edit(./.claude/hooks/scope-guard.sh)",
+      "Write(./.claude/hooks/scope-guard.sh)",
+      "Edit(./.claude/hooks/hooklib.sh)",
+      "Write(./.claude/hooks/hooklib.sh)",
+      "Edit(./.claude/hooks/escalation-lib.sh)",
+      "Write(./.claude/hooks/escalation-lib.sh)",
+      "Edit(./.claude/hooks/approve.sh)",
+      "Write(./.claude/hooks/approve.sh)",
+      "Edit(./.claude/hooks/ratchet.config.sh)",
+      "Write(./.claude/hooks/ratchet.config.sh)",
+      "Bash(.claude/hooks/approve.sh:*)",
+      "Bash(bash .claude/hooks/approve.sh:*)",
+      "Bash(sh .claude/hooks/approve.sh:*)",
+
+      "Read(./secrets/escalation.key)",
+      "Read(./{{RATCHET_ESCALATION_KEY}})",
+      "Write(./.pipeline/escalations/**)",
+      "Edit(./.pipeline/escalations/**)",
+
+      "Edit(./CLAUDE.md)",
+      "Write(./CLAUDE.md)",
+      "Edit(./.context/CLAUDE.md)",
+      "Write(./.context/CLAUDE.md)",
+      "Edit(./.context/PIPELINE.md)",
+      "Write(./.context/PIPELINE.md)",
+      "Edit(./.context/CONVENTIONS.md)",
+      "Write(./.context/CONVENTIONS.md)",
+      "Edit(./.context/SPEC.md)",
+      "Write(./.context/SPEC.md)",
+      "Edit(./.context/MILESTONES.md)",
+      "Write(./.context/MILESTONES.md)",
+
+      "{{RATCHET_CORPUS_DENY}}",
+      "{{RATCHET_BANNED_READ_DENY}}",
+      "{{RATCHET_DOMAIN_DENY}}"
+    ]
+  },
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.sh\"",
+            "timeout": 120
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/scope-guard.sh\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/format.sh\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "developer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-gate.sh\"",
+            "timeout": 300
+          }
+        ]
+      },
+      {
+        "matcher": "test-writer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/red-gate.sh\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-gate.sh\"",
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/notify.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

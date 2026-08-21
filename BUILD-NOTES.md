@@ -1,0 +1,65 @@
+# Ratchet 1.0.0 — build notes
+
+What this is, what was verified, and what was not. Read the honest-limitations section
+before you trust anything here in anger.
+
+## Provenance
+
+Ratchet is a generic extraction of a private, battle-tested Claude Code delivery pipeline
+that ran nine real milestones over roughly a month. The audit that motivated the extraction
+is `docs/audit-and-blueprint.md`. Ratchet is a **fresh generic implementation** of that
+pipeline's doctrine, not a find-and-replace of its files: the original's coupling was small
+but its known defects were real, and a template mass-produces whatever it ships with.
+
+## Verified in this build
+
+- **Self-test: 175 tests, 167 pass, 0 fail, 8 skip, ~100s.** Run `python3 .claude/hooks/test_hooks.py`.
+- **`install.sh` end-to-end** into two scratch repos: clean install, idempotent re-install,
+  settings.json merge with backup, gitignore verification via `git check-ignore`, key
+  generation at 0600, and uninstall (which restores settings and deliberately preserves your
+  content — domain pack, evidence, findings, secrets — and says so).
+- **Live guard behaviour** on the installed repo: secrets read blocked, evidence deletion
+  blocked, force push blocked, ordinary test command allowed.
+- **Every shell file `bash -n` clean; every Python file compiles; settings template is valid JSON.**
+- **Zero source-project nouns** anywhere in the harness (enforced by a test, not by hope).
+
+## Defects found and fixed during integration
+
+Found by the self-test, i.e. the suite earned its keep before shipping:
+
+| defect | severity | fix |
+|---|---|---|
+| `git push --delete origin main` was permitted with consent | HIGH — deletes the base branch | `--delete`/`-d` now classed with force-push, never-escalatable |
+| bare `git push` target was assumed from the current branch | HIGH — `push.default=matching` pushes the base branch from anywhere | new rule `push-target-unprovable`: fail closed, make the caller name the refspec |
+| `*` crossed `/` in partition globs (`src/*.py` admitted `src/deep/a.py`) | MEDIUM — a partition is silently wider than the architect declared | segment-aware matcher; `**` crosses, `*` does not |
+| a missing escalation key was never surfaced | MEDIUM — every "ESCALATABLE" refusal is a dead end and you find out mid-run | session-start now probes the approval channel and says so in plain words |
+| scope-guard bound approvals to the path, not the resulting bytes | MEDIUM — no approval could ever match | passes the target sha through |
+| deleting a temp file outside the repo was refused | LOW — a control layer you cannot use is one agents route around | recognised temp roots exempt; arbitrary absolute paths still refused |
+| law block was not delimited in the 12 seats | LOW — the anti-drift comparator could not run | `<!-- LAWBLOCK:BEGIN/END -->` in every seat |
+| two seeded lesson names failed the naming doctrine's own regex | LOW | renamed before first filing (a name is permanent after that) |
+
+## Honest limitations
+
+1. **`install.ps1` has never been executed on Windows.** No PowerShell in the build sandbox.
+   It is structurally validated (balanced blocks, no BOM, LF-safe writes, 5.1-compatible
+   constructs) and written against the known 5.1 traps, but it needs one real run before you
+   trust it. `install.sh` under Git-Bash is the verified Windows path today.
+2. **GitHub only.** The `gh` CLI, PR flow and branch protection are assumed. Other forges
+   need work in `guard.sh`'s ship-flow section.
+3. **`gh` was absent in the sandbox**, so the ship flow's live merge path is unexercised.
+   The refusals around it are tested; the success path is not.
+4. **8 skipped tests**, each skipping loudly rather than passing falsely: 2 need a TTY, 2 cover
+   an unimplemented `COMMIT_SCOPE_LINES` declaration rule, 1 needs a Windows host, and 3 are
+   test-harness gaps (notably `rt_work_seconds`, whose behaviour was verified by hand:
+   5000s elapsed with 4000s idle folds to 1000s of work).
+5. **The consent record is a record, not a control.** Branch protection is the control. The
+   harness says this in three places because the source pipeline learned it the hard way.
+6. **Nothing here has run a real milestone yet.** The pipeline is proven in its predecessor;
+   this generic build is proven only against its own test suite and two scratch installs.
+
+## First-run advice
+
+Do not point this at important work on day one. Install it, fill `SPEC.md` and
+`MILESTONES.md` with a deliberately small M0 (two WIN rows), and run that. You want to see
+the gates fire, a Decision Card arrive, and a checkpoint block — cheaply — before a real
+milestone depends on them.
