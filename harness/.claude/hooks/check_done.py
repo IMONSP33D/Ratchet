@@ -678,11 +678,32 @@ def milestones_rows(ctx, milestone):
     return out, p
 
 
+UNWRITTEN_MARKER = "<!-- ratchet:unwritten -->"
+
+
+def milestones_unwritten(ctx):
+    """True when MILESTONES.md is still the shipped placeholder. The marker is
+    machine-detectable on purpose: an unwritten milestone must FAIL loudly, not
+    pass vacuously because a file with no WIN rows also has no bad WIN rows."""
+    cdir = ctx.path("CONTEXT_DIR")
+    if not cdir:
+        return False
+    p = os.path.join(cdir, "MILESTONES.md")
+    if not os.path.isfile(p):
+        return False
+    return UNWRITTEN_MARKER in read_text(p)
+
+
 def check_win_rows(ctx):
     n, name = 3, "win-rows"
     milestone = ctx.milestone()
     if not milestone:
         return skip(n, name, "no active run (RUN_ACTIVE empty): nothing to prove")
+    if milestones_unwritten(ctx):
+        msg = ("MILESTONES.md has not been written yet --- read .context/TEMPLATE.md "
+               "and write it; a run cannot be judged against a milestone that does "
+               "not exist")
+        return bad(n, name, msg, [msg])
     rows, mpath = milestones_rows(ctx, milestone)
     problems = []
     if not rows:

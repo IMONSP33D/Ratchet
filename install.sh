@@ -36,7 +36,14 @@
 #   --substitute-only         only re-run {{MARKER}} substitution
 #   --uninstall               reverse the install, restoring backups
 #   --no-verify               skip running test_hooks.py at the end
+#   --quiet | -q              errors and the final summary only
+#   --no-color                never emit colour (same as NO_COLOR=1)
+#   --ascii                   plain ASCII frames; no box-drawing characters
 #   -h | --help
+#
+# Presentation is also controlled by the environment: NO_COLOR disables colour,
+# RATCHET_ASCII disables box-drawing, and colour is suppressed entirely when
+# stdout is not a terminal or TERM=dumb, so a redirected log stays clean.
 #
 # Exit codes:
 #   0  installed / upgraded / uninstalled / dry-run completed
@@ -47,30 +54,406 @@ set -uo pipefail
 # NOT set -e. A failed optional step must be REPORTED, not silently abort a
 # half-finished install. Every step that matters checks its own exit status.
 
-RT_INSTALLER_VERSION="1.0.0"
+RT_INSTALLER_VERSION="1.1.0"
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || {
   printf 'install: cannot resolve my own directory\n' >&2; exit 2; }
 HARNESS_DIR="$SRC_DIR/harness"
 
 # ----------------------------------------------------------------- output ---
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-  C_B="$(printf '\033[1m')"; C_R="$(printf '\033[31m')"; C_Y="$(printf '\033[33m')"
-  C_G="$(printf '\033[32m')"; C_0="$(printf '\033[0m')"
-else
-  C_B=""; C_R=""; C_Y=""; C_G=""; C_0=""
-fi
+# PRESENTATION LAYER. Nothing below decides anything -- it only draws. The
+# rules it obeys, because an installer whose chrome breaks the install is far
+# worse than an ugly installer:
+#   * safe under `set -u`: every read is defaulted, no unset variable is touched
+#   * no external dependency: no figlet, no tput requirement (tput is consulted
+#     only if it happens to exist, and only for the terminal width)
+#   * not one escape byte reaches a redirected log: colour requires a TTY
+#   * ASCII whenever UTF-8 is not known to be safe -- a mangled box border in
+#     an install transcript is a support ticket
+#   * width-aware: 80 by default, clamped to [40,100], never overflows a border
+#
+# Honoured, in this order: --ascii / RATCHET_ASCII, NO_COLOR, TERM=dumb, "am I
+# even a terminal", then the locale.
+
+RT_QUIET=0
+RT_ASCII=0
+RT_TTY=0
+RT_COLOR=0
+RT_W=80
+RT_PHASE_TOTAL=7
+RT_SPIN_PID=""
+RT_SPIN_DELAY="0.12"
+RT_SPIN_LABEL=""
+RT_SPIN=('|' '/' '-' '\')
+RT_AFTER_HEAD=0     # suppresses the blank line a step header would otherwise
+                    # add immediately under a phase header
+
+# Repeat a (possibly multi-byte) unit N times. Deliberately does not MEASURE
+# anything: the caller knows how many columns it asked for, and counting bytes
+# in a UTF-8 box character under a C locale is exactly how borders end up
+# ragged. Non-numeric or negative counts render as nothing rather than erroring.
+rt_rep() {
+  local u="${1:-}" n="${2:-0}" out="" i=0
+  case "$n" in (*[!0-9]*|"") n=0 ;; esac
+  while [ "$i" -lt "$n" ]; do out="$out$u"; i=$((i+1)); done
+  printf '%s' "$out"
+}
+rt_sp() { rt_rep ' ' "${1:-0}"; }
+
+# Fit an ASCII string into exactly N columns: truncated with an ellipsis when
+# too long, space-padded when short. Every string this is called with is a path
+# or a label, so a byte count is a column count.
+rt_fit() {
+  local t="${1:-}" w="${2:-0}" n
+  case "$w" in (*[!0-9]*|"") w=0 ;; esac
+  n=${#t}
+  if [ "$n" -gt "$w" ]; then
+    if [ "$w" -gt 4 ]; then printf '%s...' "${t:0:$((w-3))}"
+    else printf '%s' "${t:0:$w}"; fi
+  else
+    printf '%s%s' "$t" "$(rt_sp $((w-n)))"
+  fi
+}
+
+# Truncate (never pad) so a header title cannot push a border past the width.
+rt_clip() {
+  local t="${1:-}" w="${2:-0}"
+  case "$w" in (*[!0-9]*|"") w=0 ;; esac
+  if [ "${#t}" -gt "$w" ]; then
+    if [ "$w" -gt 4 ]; then printf '%s...' "${t:0:$((w-3))}"
+    else printf '%s' "${t:0:$w}"; fi
+  else
+    printf '%s' "$t"
+  fi
+}
+
+# Is it safe to emit box-drawing characters? Only when we are reasonably sure
+# the receiving terminal decodes UTF-8. A wrong guess here produces the classic
+# "â??" install log, so every uncertain case falls back to ASCII.
+rt_unicode_ok() {
+  [ "$RT_ASCII" = "1" ] && return 1
+  [ -n "${RATCHET_ASCII:-}" ] && return 1
+  case "${TERM:-}" in ""|dumb) return 1 ;; esac
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8*|*utf-8*|*UTF8*|*utf8*) return 0 ;;
+  esac
+  # A Windows console -- Git-Bash, MSYS, Cygwin -- is safe only on code page
+  # 65001. The legacy pages mangle every byte above 0x7f, and that is the one
+  # environment where this failure is common rather than theoretical.
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*)
+      case "$(chcp.com 2>/dev/null | tr -d '\r')" in *65001*) return 0 ;; esac
+      return 1 ;;
+  esac
+  # No locale at all is normal in containers and CI, where the terminal is
+  # UTF-8 regardless. Nothing this script MEASURES is non-ASCII, so a
+  # byte-counting locale cannot misalign a column; only the glyphs are at risk.
+  return 0
+}
+
+# Recomputed after argument parsing so --ascii / --no-color / --quiet apply.
+rt_init_style() {
+  local w=""
+
+  RT_TTY=0
+  [ -t 1 ] && RT_TTY=1
+
+  # --- width ---------------------------------------------------------------
+  # Redirected output gets a fixed 80 so a log is byte-identical wherever it
+  # was produced.
+  if [ "$RT_TTY" = "1" ]; then
+    w="${COLUMNS:-}"
+    if [ -z "$w" ] && command -v tput >/dev/null 2>&1; then
+      w="$(tput cols 2>/dev/null || true)"
+    fi
+  fi
+  case "$w" in (*[!0-9]*|"") w=80 ;; esac
+  [ "$w" -lt 40 ]  && w=80
+  [ "$w" -gt 100 ] && w=100
+  RT_W="$w"
+
+  # --- colour --------------------------------------------------------------
+  RT_COLOR=0
+  if [ "$RT_TTY" = "1" ] && [ -z "${NO_COLOR:-}" ]; then
+    case "${TERM:-}" in
+      ""|dumb) RT_COLOR=0 ;;
+      *)
+        case "${COLORTERM:-}|${TERM:-}" in
+          truecolor*|24bit*|*256color*|*direct*) RT_COLOR=256 ;;
+          *) RT_COLOR=16 ;;
+        esac ;;
+    esac
+  fi
+
+  if [ "$RT_COLOR" = "256" ]; then
+    C_B=$'\033[1m';           C_0=$'\033[0m'
+    C_R=$'\033[38;5;203m';    C_Y=$'\033[38;5;214m'
+    C_G=$'\033[38;5;78m';     C_ACC=$'\033[38;5;38m'
+    C_DIM=$'\033[38;5;243m';  C_TTL=$'\033[1;38;5;231m'
+  elif [ "$RT_COLOR" = "16" ]; then
+    C_B=$'\033[1m';           C_0=$'\033[0m'
+    C_R=$'\033[31m';          C_Y=$'\033[33m'
+    C_G=$'\033[32m';          C_ACC=$'\033[36m'
+    C_DIM=$'\033[2m';         C_TTL=$'\033[1;37m'
+  else
+    C_B=""; C_0=""; C_R=""; C_Y=""; C_G=""; C_ACC=""; C_DIM=""; C_TTL=""
+  fi
+
+  # --- glyphs --------------------------------------------------------------
+  if rt_unicode_ok; then
+    G_OK=$'\xe2\x9c\x94'; G_WARN="!"; G_ERR=$'\xe2\x9c\x98'
+    G_INFO=$'\xc2\xb7';   G_DRY=$'\xe2\x97\xa6'; G_SUB=$'\xe2\x96\xaa'
+    B_H=$'\xe2\x94\x80';  B_V=$'\xe2\x94\x82'
+    B_TL=$'\xe2\x94\x8c'; B_TR=$'\xe2\x94\x90'
+    B_BL=$'\xe2\x94\x94'; B_BR=$'\xe2\x94\x98'
+    D_H=$'\xe2\x95\x90';  D_V=$'\xe2\x95\x91'
+    D_TL=$'\xe2\x95\x94'; D_TR=$'\xe2\x95\x97'
+    D_BL=$'\xe2\x95\x9a'; D_BR=$'\xe2\x95\x9d'
+    R_H=$'\xe2\x94\x81'
+    LEAD=$'\xc2\xb7'
+    BAR_F=$'\xe2\x96\xb0'; BAR_E=$'\xe2\x96\xb1'
+    RT_SPIN=($'\xe2\xa0\x8b' $'\xe2\xa0\x99' $'\xe2\xa0\xb9' $'\xe2\xa0\xb8' \
+             $'\xe2\xa0\xbc' $'\xe2\xa0\xb4' $'\xe2\xa0\xa6' $'\xe2\xa0\xa7' \
+             $'\xe2\xa0\x87' $'\xe2\xa0\x8f')
+  else
+    G_OK="+"; G_WARN="!"; G_ERR="x"; G_INFO="."; G_DRY="o"; G_SUB="*"
+    B_H="-"; B_V="|"; B_TL="+"; B_TR="+"; B_BL="+"; B_BR="+"
+    D_H="="; D_V="|"; D_TL="+"; D_TR="+"; D_BL="+"; D_BR="+"
+    R_H="="
+    LEAD="."
+    BAR_F="#"; BAR_E="-"
+    RT_SPIN=('|' '/' '-' '\')
+  fi
+
+  # A spinner that cannot sleep for a fraction of a second would burn a core
+  # for the whole test suite, so the capability is probed once, cheaply.
+  if [ "$RT_TTY" = "1" ] && [ -z "$RT_SPIN_PID" ]; then
+    if sleep 0.01 >/dev/null 2>&1; then RT_SPIN_DELAY="0.12"; else RT_SPIN_DELAY="1"; fi
+  fi
+}
+
+rt_init_style
 
 WARNINGS=0
 MISSING_FILES=""
 
+# --- the two-column status line ---------------------------------------------
+# label ..................... status, right-flush, aligned whatever the label
+# length is. When a label is too long for a leader (the wordy host-check
+# messages are paragraphs, not labels) the line degrades to glyph + text rather
+# than wrapping mid-word or pushing the status off the edge.
+rt_status() {
+  local col="${1:-}" gl="${2:-}" st="${3:-}"; shift 3
+  local msg="$*" avail lead
+  avail=$(( RT_W - 11 ))
+  if [ -n "$st" ] && [ "${#msg}" -le $(( avail - 3 )) ]; then
+    lead=$(( avail - ${#msg} ))
+    printf '  %s%s%s  %s %s%s%s %s%4s%s\n' \
+      "$col" "$gl" "$C_0" "$msg" \
+      "$C_DIM" "$(rt_rep "$LEAD" "$lead")" "$C_0" \
+      "$col" "$st" "$C_0"
+  else
+    printf '  %s%s%s  %s\n' "$col" "$gl" "$C_0" "$msg"
+  fi
+  RT_AFTER_HEAD=0
+}
+
 say()  { printf '%s\n' "$*"; }
-head1() { printf '\n%s%s%s\n' "$C_B" "$*" "$C_0"; }
-ok()   { printf '  %sok%s    %s\n' "$C_G" "$C_0" "$*"; }
-info() { printf '  ..    %s\n' "$*"; }
-warn() { printf '  %sWARN%s  %s\n' "$C_Y" "$C_0" "$*"; WARNINGS=$((WARNINGS+1)); }
-err()  { printf '  %sFAIL%s  %s\n' "$C_R" "$C_0" "$*" >&2; }
-die()  { printf '\n%sinstall refused:%s %s\n\n' "$C_R" "$C_0" "$*" >&2; exit 2; }
+raw()  { printf '%s\n' "$*"; }
+ok()   { [ "$RT_QUIET" = "1" ] && return 0; rt_status "$C_G"   "$G_OK"   "ok"   "$*"; }
+info() { [ "$RT_QUIET" = "1" ] && return 0; rt_status "$C_DIM" "$G_INFO" ""     "$*"; }
+dry()  { [ "$RT_QUIET" = "1" ] && return 0; rt_status "$C_Y"   "$G_DRY"  "dry"  "$*"; }
+warn() { WARNINGS=$((WARNINGS+1)); rt_status "$C_Y" "$G_WARN" "warn" "$*"; }
+err()  { rt_status "$C_R" "$G_ERR" "FAIL" "$*" >&2; }
+pass() { rt_status "$C_G" "$G_OK" "PASS" "$*"; }
+
+# --- rules, headers, boxes ---------------------------------------------------
+rt_rule() { # rt_rule [colour]
+  printf '%s%s%s\n' "${1:-$C_DIM}" "$(rt_rep "$B_H" "$RT_W")" "$C_0"
+}
+
+# A numbered phase header: the reader always knows where they are and how much
+# is left. The bar is dropped on narrow terminals rather than wrapped.
+rt_phase() {
+  [ "$RT_QUIET" = "1" ] && return 0
+  local n="${1:-0}"; shift
+  local title="$*" tag fill barw=12 barblock=0 filled cap
+  tag="[$n/$RT_PHASE_TOTAL]"
+  [ "$RT_W" -ge 66 ] && barblock=$(( barw + 1 ))
+  cap=$(( RT_W - 7 - ${#tag} - barblock ))
+  [ "$cap" -lt 8 ] && cap=8
+  title="$(rt_clip "$title" "$cap")"
+  fill=$(( RT_W - 5 - ${#tag} - ${#title} - barblock ))
+  [ "$fill" -lt 2 ] && { barblock=0; fill=$(( RT_W - 5 - ${#tag} - ${#title} )); }
+  [ "$fill" -lt 2 ] && fill=2
+  printf '\n%s%s%s %s%s%s %s%s%s %s%s%s' \
+    "$C_DIM" "$(rt_rep "$R_H" 2)" "$C_0" \
+    "$C_ACC" "$tag" "$C_0" \
+    "$C_TTL" "$title" "$C_0" \
+    "$C_DIM" "$(rt_rep "$R_H" "$fill")" "$C_0"
+  if [ "$barblock" -gt 0 ]; then
+    filled=$(( n * barw / RT_PHASE_TOTAL ))
+    [ "$filled" -gt "$barw" ] && filled="$barw"
+    printf ' %s%s%s%s%s' \
+      "$C_ACC" "$(rt_rep "$BAR_F" "$filled")" \
+      "$C_DIM" "$(rt_rep "$BAR_E" $(( barw - filled )))" "$C_0"
+  fi
+  printf '\n\n'
+  RT_AFTER_HEAD=1
+}
+
+# An unnumbered full-width header, for the paths that are not the seven-phase
+# install: uninstall, --substitute-only, and the closing blocks.
+rt_head() {
+  local title="$*" fill
+  title="$(rt_clip "$title" $(( RT_W - 6 )))"
+  fill=$(( RT_W - 4 - ${#title} ))
+  [ "$fill" -lt 2 ] && fill=2
+  printf '\n%s%s%s %s%s%s %s%s%s\n\n' \
+    "$C_DIM" "$(rt_rep "$R_H" 2)" "$C_0" \
+    "$C_TTL" "$title" "$C_0" \
+    "$C_DIM" "$(rt_rep "$R_H" "$fill")" "$C_0"
+  RT_AFTER_HEAD=1
+}
+
+# A step inside a phase. Its own blank line is dropped when it lands directly
+# under a phase header, so the two never stack into a gap.
+rt_sub() {
+  [ "$RT_QUIET" = "1" ] && return 0
+  [ "$RT_AFTER_HEAD" = "1" ] || printf '\n'
+  printf '  %s%s%s  %s%s%s\n' "$C_ACC" "$G_SUB" "$C_0" "$C_B" "$*" "$C_0"
+  RT_AFTER_HEAD=1
+}
+head1() { rt_sub "$*"; }
+
+# --- boxes -------------------------------------------------------------------
+# Every box line is built from a known column count, never from a measurement
+# of a multi-byte string, so a border cannot come out ragged.
+rt_box_top() { # rt_box_top <style: light|double> [title]
+  local st="${1:-light}" title="${2:-}" h v tl tr fill
+  if [ "$st" = "double" ]; then h="$D_H"; tl="$D_TL"; tr="$D_TR"
+  else h="$B_H"; tl="$B_TL"; tr="$B_TR"; fi
+  if [ -n "$title" ]; then
+    title="$(rt_clip "$title" $(( RT_W - 7 )))"
+    fill=$(( RT_W - 5 - ${#title} ))
+    [ "$fill" -lt 1 ] && fill=1
+    printf '%s%s%s %s%s%s %s%s%s%s\n' \
+      "$C_ACC" "$tl$h" "$C_0" "$C_TTL" "$title" "$C_0" \
+      "$C_ACC" "$(rt_rep "$h" "$fill")" "$tr" "$C_0"
+  else
+    printf '%s%s%s%s%s\n' "$C_ACC" "$tl" "$(rt_rep "$h" $(( RT_W - 2 )))" "$tr" "$C_0"
+  fi
+}
+rt_box_bottom() {
+  local st="${1:-light}" h bl br
+  if [ "$st" = "double" ]; then h="$D_H"; bl="$D_BL"; br="$D_BR"
+  else h="$B_H"; bl="$B_BL"; br="$B_BR"; fi
+  printf '%s%s%s%s%s\n' "$C_ACC" "$bl" "$(rt_rep "$h" $(( RT_W - 2 )))" "$br" "$C_0"
+}
+# rt_box_line <style> <plain-text>  -- padded to the border, truncated if long
+rt_box_line() {
+  local st="${1:-light}" text="${2:-}" col="${3:-}" v
+  if [ "$st" = "double" ]; then v="$D_V"; else v="$B_V"; fi
+  printf '%s%s%s %s%s%s %s%s%s\n' \
+    "$C_ACC" "$v" "$C_0" \
+    "$col" "$(rt_fit "$text" $(( RT_W - 4 )))" "$C_0" \
+    "$C_ACC" "$v" "$C_0"
+}
+# rt_box_kv <style> <key> <value> [value-colour] -- the summary table's rows
+rt_box_kv() {
+  local st="${1:-light}" k="${2:-}" val="${3:-}" vc="${4:-}" v kw=18
+  if [ "$st" = "double" ]; then v="$D_V"; else v="$B_V"; fi
+  printf '%s%s%s   %s%s%s  %s%s%s %s%s%s\n' \
+    "$C_ACC" "$v" "$C_0" \
+    "$C_DIM" "$(rt_fit "$k" "$kw")" "$C_0" \
+    "${vc:-$C_B}" "$(rt_fit "$val" $(( RT_W - kw - 8 )))" "$C_0" \
+    "$C_ACC" "$v" "$C_0"
+}
+
+rt_banner() {
+  [ "$RT_QUIET" = "1" ] && return 0
+  local plain pad
+  printf '\n'
+  rt_box_top double
+  rt_box_line double ""
+  # The one line drawn by hand rather than by rt_box_line, because it carries
+  # two colours. The padding is still derived from an ASCII twin of the line,
+  # so it cannot disagree with the border.
+  plain="  R A T C H E T   v$RT_INSTALLER_VERSION"
+  pad=$(( RT_W - 4 - ${#plain} ))
+  [ "$pad" -lt 0 ] && pad=0
+  printf '%s%s%s %s  R A T C H E T%s   %s%s%s%s %s%s%s\n' \
+    "$C_ACC" "$D_V" "$C_0" \
+    "$C_TTL" "$C_0" \
+    "$C_ACC" "v$RT_INSTALLER_VERSION" "$C_0" "$(rt_sp "$pad")" \
+    "$C_ACC" "$D_V" "$C_0"
+  rt_box_line double "  the run moves forward or it stops; it never quietly slides back" "$C_DIM"
+  if [ "${DRY_RUN:-0}" = "1" ]; then
+    rt_box_line double ""
+    rt_box_line double "  DRY RUN -- every action is printed, and nothing is written" "$C_Y"
+  fi
+  rt_box_line double ""
+  rt_box_bottom double
+}
+
+# --- spinner -----------------------------------------------------------------
+# Two steps in this installer are slow enough (the hook suite, then the
+# postcondition baseline that re-runs it) that silence is indistinguishable
+# from a hang. On a TTY that is a spinner; anywhere else it is one static line,
+# because a carriage-return animation in a redirected log is unreadable noise.
+rt_spin_start() {
+  RT_SPIN_LABEL="$*"
+  [ "$RT_QUIET" = "1" ] && return 0
+  if [ "$RT_TTY" != "1" ]; then
+    printf '  %s%s%s  %s ... working\n' "$C_DIM" "$G_INFO" "$C_0" "$RT_SPIN_LABEL"
+    return 0
+  fi
+  (
+    i=0
+    while :; do
+      printf '\r  %s%s%s  %s%s%s ' \
+        "$C_ACC" "${RT_SPIN[$(( i % ${#RT_SPIN[@]} ))]}" "$C_0" \
+        "$C_DIM" "$RT_SPIN_LABEL" "$C_0"
+      i=$(( i + 1 ))
+      sleep "$RT_SPIN_DELAY" 2>/dev/null || sleep 1
+    done
+  ) &
+  RT_SPIN_PID=$!
+}
+rt_spin_kill() {
+  [ -n "$RT_SPIN_PID" ] || return 0
+  kill "$RT_SPIN_PID" >/dev/null 2>&1
+  wait "$RT_SPIN_PID" >/dev/null 2>&1
+  RT_SPIN_PID=""
+  printf '\r%s\r' "$(rt_sp "$RT_W")"
+}
+# rt_spin_stop <ok|warn|fail> <message> -- clears the animation, then reports
+rt_spin_stop() {
+  local kind="${1:-ok}"; shift
+  rt_spin_kill
+  [ "$RT_QUIET" = "1" ] && return 0
+  case "$kind" in
+    ok)   ok "$*" ;;
+    none) : ;;
+    *)    info "$*" ;;
+  esac
+}
+
+die()  {
+  local msg="$*" first rest
+  rt_spin_kill
+  first="$(printf '%s\n' "$msg" | head -1)"
+  rest="$(printf '%s\n' "$msg" | tail -n +2)"
+  {
+    printf '\n  %s%s%s  %sinstall refused:%s %s\n' \
+      "$C_R" "$G_ERR" "$C_0" "$C_R$C_B" "$C_0" "$first"
+    if [ -n "$rest" ]; then
+      printf '%s\n' "$rest" | while IFS= read -r l; do printf '   %s\n' "$l"; done
+    fi
+    printf '\n'
+  } >&2
+  exit 2
+}
 
 # ------------------------------------------------------------------ args ----
 TARGET=""
@@ -110,6 +493,9 @@ while [ $# -gt 0 ]; do
     --uninstall)       UNINSTALL=1 ;;
     --substitute-only) SUBST_ONLY=1 ;;
     --no-verify)       RUN_VERIFY=0 ;;
+    --quiet|-q)        RT_QUIET=1 ;;
+    --no-color|--no-colour) NO_COLOR=1; export NO_COLOR ;;
+    --ascii)           RT_ASCII=1 ;;
     -h|--help)         usage; exit 0 ;;
     *)                 die "unknown argument: $1 (try --help)" ;;
   esac
@@ -125,12 +511,18 @@ case "$ESCALATION_MODE" in
   *) die "--escalation-mode must be 'light' or 'strict' (got: $ESCALATION_MODE)" ;;
 esac
 
+# The style was initialised once already so that a `die` during argument
+# parsing is still legible; recompute it now that --quiet/--ascii/--no-color
+# have been seen, then draw the header.
+rt_init_style
+rt_banner
+
 # ============================================================================
 # SECTION 1 — HOST CHECKS. These run FIRST and they run before anything on
 # disk is touched. A harness whose gates cannot execute is worse than no
 # harness: it looks like it is protecting you and it is not.
 # ============================================================================
-head1 "RATCHET installer $RT_INSTALLER_VERSION -- host checks"
+rt_phase 1 "Host checks"
 
 HOST_FATAL=0
 
@@ -211,45 +603,102 @@ else
 fi
 
 # --- can PYTHON spawn a working bash? (the WSL relay trap) -----------------
-# This script is bash, so bash obviously works HERE. That proves nothing about
-# what the Python-side suite gets: test_hooks.py drives every hook by spawning
-# bash, and on Windows the PATH it sees usually starts with
-# C:\Windows\System32\bash.exe -- the WSL *relay*. With no working distro that
-# relay dies with "execvpe(/bin/bash) failed" BEFORE the hook runs, so every
-# gate looks broken and the suite reports a hundred-plus failures that have
-# nothing to do with the gates. Catch it here, where the message can still help.
+# This script IS bash, so bash obviously works here. That proves nothing about
+# what the Python side gets: test_hooks.py drives every hook by spawning bash,
+# and it resolves that name independently. On Windows the first `bash` on PATH
+# is usually C:\Windows\System32\bash.exe -- the WSL *relay* -- which dies with
+# "execvpe(/bin/bash) failed" before the hook runs when no distro is installed.
+#
+# We hand Python OUR bash first, because we are running under one that works.
+# Only if Python cannot run even that do we have a real problem.
 if [ -n "$PY" ]; then
-  PY_BASH="$("$PY" - <<'PYEOF' 2>/dev/null
-import os, subprocess, shutil, sys
+  SELF_BASH="${BASH:-}"
+  [ -n "$SELF_BASH" ] || SELF_BASH="$(command -v bash 2>/dev/null || true)"
+
+  # NOTE: $PY is deliberately UNQUOTED. It may be multi-word ("py -3"), and a
+  # quoted expansion looks for a file literally named "py -3", silently yields
+  # nothing, and makes a working host look broken. (It did exactly that.)
+  PY_BASH="$(RATCHET_SELF_BASH="$SELF_BASH" $PY - <<'PYEOF' 2>/dev/null
+import os, shutil, subprocess, sys
+
 def works(c):
-    if not c: return False
+    if not c:
+        return False
     try:
-        r = subprocess.run([c, "-c", "printf ok"], capture_output=True, text=True, timeout=20)
+        r = subprocess.run([c, "-c", "printf ratchet-ok"],
+                           capture_output=True, text=True, timeout=20)
     except Exception:
         return False
-    return r.returncode == 0 and "ok" in (r.stdout or "")
-c = os.environ.get("RATCHET_BASH") or shutil.which("bash")
-print(c if works(c) else "")
+    return r.returncode == 0 and "ratchet-ok" in (r.stdout or "")
+
+cands, seen = [], set()
+def add(c):
+    if c and c not in seen:
+        seen.add(c); cands.append(c)
+
+add(os.environ.get("RATCHET_BASH"))
+add(os.environ.get("RATCHET_SELF_BASH"))     # the shell running the installer
+if os.name == "nt":
+    for root in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                 os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+        if root:
+            for sub in (r"Git\bin\bash.exe", r"Git\usr\bin\bash.exe"):
+                add(os.path.join(root, sub))
+else:
+    for c in ("/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"):
+        add(c)
+add(shutil.which("bash"))
+
+for c in cands:
+    if os.sep in c and not os.path.isfile(c):
+        continue
+    if works(c):
+        print(c); break
 PYEOF
 )"
+
   if [ -n "$PY_BASH" ]; then
     ok "python can spawn bash ('$PY_BASH')"
-    # Pin it for the verification run and for every hook that shells out to the
-    # suite later, so the Python side and the shell side cannot disagree.
     [ -n "${RATCHET_BASH:-}" ] || export RATCHET_BASH="$PY_BASH"
   else
-    err "Python cannot spawn a working bash."
-    say "        Every hook is a bash script and the test suite drives them through"
-    say "        Python, so this breaks the whole control layer -- and it breaks it in"
-    say "        the most confusing possible way: the gates are fine, but every test"
-    say "        fails with an exec error and the suite looks catastrophically red."
-    say ""
-    say "        On Windows this is almost always C:\\Windows\\System32\\bash.exe (the"
-    say "        WSL relay) shadowing Git-Bash, with no WSL distro installed."
-    say "        Fix either way:"
-    say "            install Git for Windows (gives you a real bash), or"
-    say "            set RATCHET_BASH=\"C:\\Program Files\\Git\\bin\\bash.exe\""
-    say "        Then re-run this installer."
+    # Before blaming bash, check the far likelier cause: a Windows Python being
+    # driven from a WSL shell. Those two live in different filesystems, so no
+    # bash path can satisfy both and the harness cannot work that way at all.
+    PY_WIN=0
+    case "$($PY -c 'import sys;print(sys.platform)' 2>/dev/null)" in win32|cygwin) PY_WIN=1 ;; esac
+    IN_WSL=0
+    { [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; } && IN_WSL=1
+
+    if [ "$PY_WIN" = "1" ] && [ "$IN_WSL" = "1" ]; then
+      err "You are in a WSL shell, but '$PY' is a WINDOWS Python."
+      say "        These two do not share a filesystem. WSL sees /home/you/repo;"
+      say "        Windows Python sees C:\\Users\\you\\repo. No single bash path can"
+      say "        satisfy both, so the hooks would be handed paths that do not exist"
+      say "        on the other side -- and every error would name a real file, which"
+      say "        is the most confusing failure this harness can produce."
+      say ""
+      say "        Pick ONE world and stay in it:"
+      say "          - all-WSL (recommended if you are already here):"
+      say "                sudo apt install python3 git"
+      say "                clone the repo INSIDE WSL (~/, not /mnt/c) and install there"
+      say "          - all-Windows: run install.ps1 from PowerShell, or install.sh"
+      say "                from Git-Bash, with python.org Python on PATH"
+    else
+      err "Python cannot spawn a working bash."
+      say "        Every hook is a bash script and the suite drives them through Python,"
+      say "        so this breaks the control layer in the most confusing way possible:"
+      say "        the gates are fine, but every test fails with an exec error."
+      say ""
+      say "        Tried, in order: \$RATCHET_BASH, this shell's own bash ($SELF_BASH),"
+      say "        the standard locations, then whatever 'bash' is on PATH."
+      say "        On Windows this is usually C:\\Windows\\System32\\bash.exe (the WSL"
+      say "        relay) shadowing Git-Bash, with no distro installed."
+      say ""
+      say "        Fix: install Git for Windows, or point us at a bash you trust:"
+      say "            RATCHET_BASH=\"/usr/bin/bash\" ./install.sh ...   (WSL/Linux/macOS)"
+      say "            set RATCHET_BASH=\"C:\\Program Files\\Git\\bin\\bash.exe\"  (Windows)"
+    fi
     HOST_FATAL=1
   fi
 fi
@@ -300,7 +749,7 @@ stack_tools() {
 # ============================================================================
 # SECTION 2 — TARGET VALIDATION
 # ============================================================================
-head1 "Target"
+rt_phase 2 "Target"
 
 [ -n "$TARGET" ] || TARGET="$PWD"
 if [ ! -d "$TARGET" ]; then
@@ -350,7 +799,8 @@ if [ -n "$DIRTY_TRACKED" ]; then
   if [ "$FORCE" = "1" ] || [ "$DRY_RUN" = "1" ] || [ "$SUBST_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
     warn "tracked files are modified; continuing (--force/--dry-run/--substitute-only/--uninstall)."
   else
-    printf '\n%sinstall refused:%s the target has modified or staged tracked files.\n\n' "$C_R" "$C_0" >&2
+    printf '\n  %s%s%s  %sinstall refused:%s the target has modified or staged tracked files.\n\n' \
+      "$C_R" "$G_ERR" "$C_0" "$C_R$C_B" "$C_0" >&2
     printf '%s\n' "$DIRTY_TRACKED" | sed 's/^/    /' >&2
     printf '\n  This matters more than usual here. The installer writes into .claude/,\n' >&2
     printf '  .context/ and .gitignore, and merges your settings.json. If any of that\n' >&2
@@ -404,10 +854,21 @@ for tool in $(stack_tools "$STACK"); do
 done
 
 if [ "$HOST_FATAL" = "1" ]; then
-  printf '\n%sinstall refused:%s one or more required host tools are missing.\n' "$C_R" "$C_0" >&2
-  printf '  Nothing was written. Fix the FAIL lines above and re-run.\n' >&2
+  printf '\n' >&2
+  rt_rule "$C_R" >&2
+  printf '  %s%s%s  %sinstall refused:%s one or more required host tools are missing.\n' \
+    "$C_R" "$G_ERR" "$C_0" "$C_R$C_B" "$C_0" >&2
+  printf '  Nothing was written.\n\n' >&2
+  printf '  Easiest fix -- the dependency installer reads the same checks and installs\n' >&2
+  printf '  what is missing for your platform:\n\n' >&2
+  printf '      ./ratchet-dependencies.sh --check      # report only, changes nothing\n' >&2
+  printf '      ./ratchet-dependencies.sh              # install what is missing\n\n' >&2
+  printf '  (Windows/PowerShell: .\\ratchet-dependencies.ps1 -Check)\n' >&2
+  printf '  Then re-run this installer.\n' >&2
   printf '  Every one of them is a tool a SECURITY GATE needs, which is why this is\n' >&2
-  printf '  a refusal and not a warning: a gate that cannot run has not passed.\n\n' >&2
+  printf '  a refusal and not a warning: a gate that cannot run has not passed.\n' >&2
+  rt_rule "$C_R" >&2
+  printf '\n' >&2
   exit 2
 fi
 
@@ -421,7 +882,7 @@ INSTALL_STATE="$TARGET/.claude/.ratchet-install.json"
 act() { # act <description> ; then the command
   local desc="$1"; shift
   if [ "$DRY_RUN" = "1" ]; then
-    printf '  %sDRY%s   %s\n' "$C_Y" "$C_0" "$desc"
+    dry "$desc"
     return 0
   fi
   "$@"
@@ -436,7 +897,7 @@ record() { # record a manifest line so --uninstall can reverse it
 mkdirp() { # mkdirp <relpath>
   local d="$TARGET/$1"
   if [ -d "$d" ]; then return 0; fi
-  if [ "$DRY_RUN" = "1" ]; then printf '  %sDRY%s   mkdir %s\n' "$C_Y" "$C_0" "$1"; return 0; fi
+  if [ "$DRY_RUN" = "1" ]; then dry "mkdir $1"; return 0; fi
   mkdir -p "$d" || { err "cannot create $1"; return 1; }
   record "D $1"
 }
@@ -454,7 +915,7 @@ copy_file() {
     return 0
   fi
   if [ "$DRY_RUN" = "1" ]; then
-    printf '  %sDRY%s   write %s\n' "$C_Y" "$C_0" "$rel"
+    dry "write $rel"
     return 0
   fi
   mkdir -p "$(dirname "$dst")" 2>/dev/null
@@ -481,7 +942,7 @@ write_file() {
   fi
   if [ "$DRY_RUN" = "1" ]; then
     cat >/dev/null
-    printf '  %sDRY%s   write %s\n' "$C_Y" "$C_0" "$rel"
+    dry "write $rel"
     return 0
   fi
   mkdir -p "$(dirname "$dst")" 2>/dev/null
@@ -494,7 +955,7 @@ write_file() {
 # SECTION 4 — UNINSTALL
 # ============================================================================
 if [ "$UNINSTALL" = "1" ]; then
-  head1 "Uninstall"
+  rt_head "Uninstall"
   if [ ! -f "$MANIFEST" ]; then
     die "no install manifest at .claude/.ratchet-install-manifest.
   Either Ratchet was never installed here, or it was installed by hand. This
@@ -558,7 +1019,7 @@ if [ "$UNINSTALL" = "1" ]; then
   done
   act "remove install manifest" rm -f "$MANIFEST" "$INSTALL_STATE"
 
-  head1 "Uninstall complete"
+  rt_head "Uninstall complete"
   say "  LEFT IN PLACE, deliberately -- this is your project's work, not the harness:"
   say "    .context/        your SPEC, MILESTONES, DECISIONS and their archive"
   say "    .agent-development/  the learning loop: run retros, lessons, pending actions"
@@ -576,7 +1037,7 @@ fi
 # ============================================================================
 # SECTION 5 — INSTALL
 # ============================================================================
-head1 "Installing"
+rt_phase 3 "Installing the harness"
 
 if [ ! -d "$HARNESS_DIR" ]; then
   die "harness source tree not found at $HARNESS_DIR.
@@ -603,7 +1064,7 @@ fi
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 
 # ---------------------------------------------------------------- 5.1 dirs --
-head1 "Scaffolding the four-directory partition"
+rt_sub "Scaffolding the four-directory partition"
 for d in \
   .claude/hooks/stack .claude/agents \
   .context/archive/decisions \
@@ -627,7 +1088,7 @@ if [ "$DRY_RUN" != "1" ]; then
 fi
 
 # ------------------------------------------------------- 5.2 harness files --
-head1 "Copying the harness"
+rt_sub "Copying the harness"
 
 copy_tree() { # copy_tree <rel-subdir> <mode> [name-filter-ext]
   local sub="$1" mode="$2" f rel base n=0
@@ -659,7 +1120,7 @@ copy_tree ".claude/agents"      replace
 
 # ------------------------------------------------------------- 5.3 context --
 # Human-owned. Written ONLY when absent -- an upgrade must never rewrite a SPEC.
-head1 "Human-owned contracts (.context/)"
+rt_sub "Human-owned contracts (.context/)"
 for f in "$HARNESS_DIR/.context"/*; do
   [ -f "$f" ] || continue
   base="$(basename "$f")"
@@ -702,13 +1163,13 @@ if [ -f "$HARNESS_DIR/.context/CLAUDE.md" ]; then
       printf '@.context/CLAUDE.md\n' > "$TARGET/CLAUDE.md" && record "F CLAUDE.md"
       ok "CLAUDE.md -> @.context/CLAUDE.md (one-line import; edit freely, it is yours)"
     else
-      printf '  %sDRY%s   write CLAUDE.md\n' "$C_Y" "$C_0"
+      dry "write CLAUDE.md"
     fi
   fi
 fi
 
 # ------------------------------------------------- 5.4 learning-loop stubs --
-head1 "Learning loop (.agent-development/)"
+rt_sub "Learning loop (.agent-development/)"
 for f in "$HARNESS_DIR/.agent-development"/*; do
   [ -f "$f" ] || continue
   copy_file "$f" ".agent-development/$(basename "$f")" if-absent >/dev/null
@@ -718,7 +1179,7 @@ ok ".agent-development/ seeded (existing files kept)"
 # ============================================================================
 # SECTION 6 — settings.json: MERGE, never overwrite
 # ============================================================================
-head1 "Permission surface (.claude/settings.json)"
+rt_phase 4 "Permission surface"
 
 TEMPLATE="$HARNESS_DIR/.claude/settings.template.json"
 if [ ! -f "$TEMPLATE" ]; then
@@ -955,9 +1416,9 @@ fi
 # ============================================================================
 # SECTION 7 — executable bits
 # ============================================================================
-head1 "Permissions on hook files"
+rt_sub "Permissions on hook files"
 if [ "$DRY_RUN" = "1" ]; then
-  printf '  %sDRY%s   chmod +x .claude/hooks/*.sh and *.py\n' "$C_Y" "$C_0"
+  dry "chmod +x .claude/hooks/*.sh and *.py"
 else
   n=0
   for f in "$TARGET/.claude/hooks"/*.sh "$TARGET/.claude/hooks"/*.py \
@@ -976,7 +1437,7 @@ fi
 # ============================================================================
 # SECTION 8 — secrets: key generation and a VERIFIED gitignore
 # ============================================================================
-head1 "Escalation key and gitignore"
+rt_phase 5 "Escalation key and gitignore"
 
 GITIGNORE="$TARGET/.gitignore"
 
@@ -986,7 +1447,7 @@ ensure_ignore() { # ensure_ignore <pattern> <comment>
     return 0
   fi
   if [ "$DRY_RUN" = "1" ]; then
-    printf '  %sDRY%s   append to .gitignore: %s\n' "$C_Y" "$C_0" "$pat"
+    dry "append to .gitignore: $pat"
     return 0
   fi
   { [ -s "$GITIGNORE" ] && [ -n "$(tail -c 1 "$GITIGNORE" 2>/dev/null)" ] && printf '\n'; } >> "$GITIGNORE" 2>/dev/null
@@ -1051,7 +1512,7 @@ if [ "$DRY_RUN" != "1" ] && ! grep -qxF "# --- Ratchet: .pipeline/ runtime (per-
   } >> "$GITIGNORE"
   ok ".pipeline/ ignore/track partition written to .gitignore"
 elif [ "$DRY_RUN" = "1" ]; then
-  printf '  %sDRY%s   write .pipeline/ ignore-and-track partition into .gitignore\n' "$C_Y" "$C_0"
+  dry "write .pipeline/ ignore-and-track partition into .gitignore"
 else
   ok ".pipeline/ partition already present in .gitignore"
 fi
@@ -1087,7 +1548,7 @@ fi
 # --- generate the key ------------------------------------------------------
 KEYFILE="$TARGET/secrets/escalation.key"
 if [ "$DRY_RUN" = "1" ]; then
-  printf '  %sDRY%s   generate secrets/escalation.key via approve.sh --init-key\n' "$C_Y" "$C_0"
+  dry "generate secrets/escalation.key via approve.sh --init-key"
 elif [ -f "$KEYFILE" ]; then
   ok "escalation key already present (not regenerated -- that is deliberate)"
 elif [ -x "$TARGET/.claude/hooks/approve.sh" ]; then
@@ -1117,7 +1578,7 @@ fi
 # SECTION 9 — the domain interview
 # ============================================================================
 if [ "$DOMAIN_MODE" = "interactive" ] && [ "$DRY_RUN" != "1" ]; then
-  head1 "Domain pack interview"
+  rt_sub "Domain pack interview"
   if [ -x "$TARGET/.claude/hooks/interview.sh" ]; then
     PROJECT_NAME="$PROJECT_NAME" "$TARGET/.claude/hooks/interview.sh" </dev/tty >/dev/tty 2>&1 \
       || warn "the interview exited non-zero; the previous domain pack is unchanged."
@@ -1125,13 +1586,13 @@ if [ "$DOMAIN_MODE" = "interactive" ] && [ "$DRY_RUN" != "1" ]; then
     warn "interview.sh not installed; skipping. Run it later:  .claude/hooks/interview.sh"
   fi
 elif [ "$DOMAIN_MODE" = "interactive" ]; then
-  printf '  %sDRY%s   run .claude/hooks/interview.sh\n' "$C_Y" "$C_0"
+  dry "run .claude/hooks/interview.sh"
 fi
 
 # ============================================================================
 # SECTION 10 — {{MARKER}} substitution
 # ============================================================================
-head1 "Substituting doctrine markers"
+rt_phase 6 "Substituting doctrine markers"
 
 # Values come from three places, in this precedence: CLI answers > the domain
 # pack > the stack pack. Everything is written to a JSON map and handed to
@@ -1263,8 +1724,7 @@ MAPFILE="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/rt-subs.$$")"
 ) > "$MAPFILE" 2>/dev/null
 
 if [ "$DRY_RUN" = "1" ]; then
-  printf '  %sDRY%s   substitute %s markers across .claude/, .context/, docs/\n' \
-    "$C_Y" "$C_0" "$(jq 'keys|length' "$MAPFILE" 2>/dev/null || echo '?')"
+  dry "substitute $(jq 'keys|length' "$MAPFILE" 2>/dev/null || echo '?') markers across .claude/, .context/, docs/"
 else
   SUBST_OUT="$(subst_run "$MAPFILE" 2>&1)"
   SUBST_N="$(printf '%s\n' "$SUBST_OUT" | sed -n 's/^SUBST_CHANGED=//p')"
@@ -1294,7 +1754,7 @@ if [ "$DRY_RUN" != "1" ]; then
 fi
 
 if [ "$SUBST_ONLY" = "1" ]; then
-  head1 "Substitution-only run complete"
+  rt_head "Substitution-only run complete"
   say "  Nothing else was touched."
   [ "$DRY_RUN" != "1" ] && [ -n "$MANIFEST_TMP" ] && rm -f "$MANIFEST_TMP"
   exit 0
@@ -1303,13 +1763,13 @@ fi
 # ============================================================================
 # SECTION 11 — PENDING-HUMAN-ACTIONS
 # ============================================================================
-head1 "Pre-filing the three human actions"
+rt_sub "Pre-filing the three human actions"
 
 PHA=".agent-development/PENDING-HUMAN-ACTIONS.md"
 if [ -f "$TARGET/$PHA" ] && grep -q "ratchet-install-human-actions" "$TARGET/$PHA" 2>/dev/null; then
   ok "$PHA already carries the install actions"
 elif [ "$DRY_RUN" = "1" ]; then
-  printf '  %sDRY%s   append three install actions to %s\n' "$C_Y" "$C_0" "$PHA"
+  dry "append three install actions to $PHA"
 else
   mkdir -p "$TARGET/.agent-development" 2>/dev/null
   if [ ! -f "$TARGET/$PHA" ]; then
@@ -1343,7 +1803,7 @@ fi
 VERIFY_RC=0
 VERIFY_STATE="not run"
 if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
-  head1 "Install verification (test_hooks.py)"
+  rt_phase 7 "Install verification"
   if [ -f "$TARGET/.claude/hooks/test_hooks.py" ]; then
     # BOUND IT. The hook suite is large and grows; on a slow host it can run for
     # minutes. An installer that hangs with no output is indistinguishable from
@@ -1351,10 +1811,11 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
     # through -- which is the one moment when a half-finished install is worst.
     VT="${RATCHET_INSTALL_VERIFY_TIMEOUT:-900}"
     VERIFY_TIMED_OUT=0
-    info "running the hook suite (bounded at ${VT}s; this is the slow step)..."
+    rt_spin_start "running the hook suite (bounded at ${VT}s; this is the slow step)..."
     if command -v timeout >/dev/null 2>&1; then
       VOUT="$(cd "$TARGET" && timeout "$VT" $PY .claude/hooks/test_hooks.py 2>&1)"
       VERIFY_RC=$?
+      rt_spin_kill
       if [ "$VERIFY_RC" = "124" ]; then
         VERIFY_STATE="TIMED OUT after ${VT}s"
         warn "the hook suite did not finish within ${VT}s. That is not a pass and it is"
@@ -1368,16 +1829,20 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
     else
       VOUT="$(cd "$TARGET" && $PY .claude/hooks/test_hooks.py 2>&1)"
       VERIFY_RC=$?
+      rt_spin_kill
     fi
     if [ "${VERIFY_TIMED_OUT:-0}" = "1" ]; then
       : # already reported above; an unfinished check is neither pass nor fail
     elif [ "$VERIFY_RC" = "0" ]; then
       VERIFY_STATE="PASS"
-      printf '  %sPASS%s  the hook suite is green on this host.\n' "$C_G" "$C_0"
-      printf '%s\n' "$VOUT" | tail -5 | sed 's/^/          /'
+      pass "the hook suite is green on this host."
+      printf '%s\n' "$VOUT" | tail -5 \
+        | sed "s/^\\(.*[^[:space:]].*\\)\$/${C_DIM}\\1${C_0}/;s/^/       /"
     else
       VERIFY_STATE="FAIL"
-      printf '\n  %s================ INSTALL VERIFICATION FAILED ================%s\n' "$C_R" "$C_0"
+      printf '\n'
+      rt_rule "$C_R"
+      printf '  %s%s  INSTALL VERIFICATION FAILED%s\n\n' "$C_R" "$C_B" "$C_0"
       printf '  test_hooks.py exited %s. The harness is installed but at least one\n' "$VERIFY_RC"
       printf '  gate does not behave the way its own tests say it should.\n\n'
       printf '%s\n' "$VOUT" | tail -30 | sed 's/^/    /'
@@ -1385,7 +1850,8 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
       printf '  gate you cannot reason about, and the whole value of this harness is\n'
       printf '  that a refusal means something. Re-run the suite yourself:\n'
       printf '      cd %s && %s .claude/hooks/test_hooks.py\n' "$TARGET" "$PY"
-      printf '  %s============================================================%s\n\n' "$C_R" "$C_0"
+      rt_rule "$C_R"
+      printf '\n'
     fi
   else
     MISSING_FILES="${MISSING_FILES}.claude/hooks/test_hooks.py
@@ -1418,10 +1884,12 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
     # This re-runs the hook suite to record the floor, so it gets the same bound.
     PCB_TO=""
     command -v timeout >/dev/null 2>&1 && PCB_TO="timeout ${RATCHET_INSTALL_VERIFY_TIMEOUT:-900}"
-    info "recording the control-layer postcondition baseline (runs the suite again)..."
+    rt_spin_start "recording the control-layer postcondition baseline (runs the suite again)..."
     if ( cd "$TARGET" && $PCB_TO ./.claude/hooks/approve.sh --postcondition-baseline ) >/dev/null 2>&1; then
+      rt_spin_kill
       ok "recorded the control-layer postcondition baseline"
     else
+      rt_spin_kill
       warn "could not record the postcondition baseline automatically. Run it yourself:"
       say "            .claude/hooks/approve.sh --postcondition-baseline"
       say "        Skipping it is only harmless on a host where the suite is fully green."
@@ -1437,28 +1905,99 @@ if [ "$DRY_RUN" != "1" ] && [ -n "$MANIFEST_TMP" ]; then
   mv -f "$MANIFEST_TMP" "$MANIFEST" 2>/dev/null
 fi
 
+# --- version + checksum baseline for ratchet-update.sh ----------------------
+# Without these, the FIRST update cannot tell "you edited this hook" from "the
+# bundle changed it", so it reports every differing harness file as UNVERIFIED
+# and preserves copies nobody asked for. Recording the baseline at install time
+# is the only moment it is free and unambiguous.
+# Format: "<sha256>  <repo-relative-path>" -- two spaces, sha256sum -c compatible.
+if [ "$DRY_RUN" != "1" ]; then
+  printf '%s\n' "$RT_INSTALLER_VERSION" > "$TARGET/.claude/.ratchet-version" 2>/dev/null || true
+
+  RT_SUM=""
+  if command -v sha256sum >/dev/null 2>&1; then RT_SUM="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then RT_SUM="shasum -a 256"
+  fi
+  if [ -n "$RT_SUM" ]; then
+    (
+      cd "$TARGET" 2>/dev/null || exit 0
+      {
+        for d in .claude/hooks .claude/hooks/stack .claude/agents; do
+          [ -d "$d" ] || continue
+          for f in "$d"/*; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              */domain.config.sh) continue ;;   # USER class: the walls you configured
+              *.local-*|*.bak-*)  continue ;;
+            esac
+            $RT_SUM "$f" 2>/dev/null
+          done
+        done
+        for f in .context/CLAUDE.md .context/PIPELINE.md .context/TEMPLATE.md .context/UPGRADING.md; do
+          [ -f "$f" ] && $RT_SUM "$f" 2>/dev/null
+        done
+      } | sed 's|  \./|  |' > .claude/.ratchet-manifest.tmp 2>/dev/null
+      mv -f .claude/.ratchet-manifest.tmp .claude/.ratchet-manifest 2>/dev/null
+    ) || true
+    if [ -f "$TARGET/.claude/.ratchet-manifest" ]; then
+      ok "recorded update baseline (.ratchet-version $RT_INSTALLER_VERSION, $(wc -l < "$TARGET/.claude/.ratchet-manifest" | tr -d ' ') checksums)"
+    fi
+  else
+    warn "no sha256 tool, so no update baseline was recorded. The first"
+    say "        ratchet-update.sh run cannot distinguish your edits from upstream"
+    say "        changes; run 'ratchet-update.sh --adopt-baseline' once to fix that."
+  fi
+fi
+
 # ============================================================================
 # SECTION 14 — REPORT
 # ============================================================================
-head1 "======================================================================"
 if [ "$DRY_RUN" = "1" ]; then
-  say "  DRY RUN COMPLETE. Nothing above was written."
-  say "  Re-run without --dry-run to apply."
-  head1 "======================================================================"
+  printf '\n'
+  rt_box_top light "RATCHET $RT_INSTALLER_VERSION -- DRY RUN"
+  rt_box_line light ""
+  rt_box_line light "  DRY RUN COMPLETE. Nothing above was written." "$C_Y$C_B"
+  rt_box_line light "  Re-run without --dry-run to apply."
+  rt_box_line light ""
+  rt_box_kv   light "would install to" "$TARGET"
+  rt_box_kv   light "project name"     "$PROJECT_NAME"
+  rt_box_kv   light "stack pack"       "$STACK"
+  rt_box_kv   light "domain pack"      "$DOMAIN_MODE"
+  rt_box_kv   light "base branch"      "$BASE_BRANCH"
+  rt_box_kv   light "escalation"       "$ESCALATION_MODE"
+  rt_box_kv   light "warnings"         "$WARNINGS"
+  rt_box_line light ""
+  rt_box_bottom light
+  printf '\n'
   exit 0
 fi
 
-say "  Ratchet $RT_INSTALLER_VERSION installed into: $TARGET"
-say "    project name    $PROJECT_NAME"
-say "    stack pack      $STACK"
-say "    domain pack     $DOMAIN_MODE"
-say "    base branch     $BASE_BRANCH"
-say "    escalation      $ESCALATION_MODE"
-say "    verification    $VERIFY_STATE"
-say "    warnings        $WARNINGS"
+# Colour follows the value, and nothing else: this is a lookup for the table
+# below, not a decision. VERIFY_STATE was settled in section 12.
+RT_VCOL="$C_DIM"
+case "$VERIFY_STATE" in
+  PASS)  RT_VCOL="$C_G" ;;
+  FAIL*) RT_VCOL="$C_R" ;;
+  TIMED*|SKIPPED*) RT_VCOL="$C_Y" ;;
+esac
+RT_WCOL="$C_G"; [ "$WARNINGS" -gt 0 ] 2>/dev/null && RT_WCOL="$C_Y"
+
+printf '\n'
+rt_box_top light "RATCHET $RT_INSTALLER_VERSION -- INSTALLED"
+rt_box_line light ""
+rt_box_kv   light "installed into" "$TARGET"
+rt_box_kv   light "project name"   "$PROJECT_NAME"
+rt_box_kv   light "stack pack"     "$STACK"
+rt_box_kv   light "domain pack"    "$DOMAIN_MODE"
+rt_box_kv   light "base branch"    "$BASE_BRANCH"
+rt_box_kv   light "escalation"     "$ESCALATION_MODE"
+rt_box_kv   light "verification"   "$VERIFY_STATE" "$RT_VCOL"
+rt_box_kv   light "warnings"       "$WARNINGS"     "$RT_WCOL"
+rt_box_line light ""
+rt_box_bottom light
 
 if [ -n "$MISSING_FILES" ]; then
-  head1 "Files the harness source did not contain"
+  rt_head "Files the harness source did not contain"
   printf '%s' "$MISSING_FILES" | sed '/^$/d' | sort -u | sed 's/^/    missing: /'
   say ""
   say "  Each of those is a component that is now NOT installed. If this is a"
@@ -1466,8 +2005,7 @@ if [ -n "$MISSING_FILES" ]; then
   say "  incomplete and you should not run a milestone against it."
 fi
 
-head1 "THREE THINGS ONLY A HUMAN CAN DO"
-say ""
+rt_head "THREE THINGS ONLY A HUMAN CAN DO"
 say "  1. PAGER. Set the webhook so a stopped run reaches you."
 say "         export RATCHET_WEBHOOK_URL='https://hooks.slack.com/services/...'"
 say "     Put it in your shell profile, not in the repo. Without it the harness"
@@ -1482,7 +2020,9 @@ say "           -f 'required_pull_request_reviews[required_approving_review_coun
 say "           -F 'enforce_admins=true' -F 'restrictions=null' -F 'required_status_checks=null'"
 say "     (or click it in Settings > Branches -- honestly, do that.)"
 say ""
-say "  3. FILL THE TWO CONTRACTS. Nothing runs without them:"
+say "  3. THE TWO CONTRACTS. They ship as placeholders on purpose: the harness"
+say "     does not guess your project. Have Claude draft them from TEMPLATE.md,"
+say "     then correct them yourself -- you own them (Tier 2b):"
 say "         .context/SPEC.md         requirement ids, frozen, cited by every test"
 say "         .context/MILESTONES.md   WIN rows, each with a verify command that"
 say "                                  exits 0 for pass. A WIN row without one is a"
@@ -1491,20 +2031,23 @@ say "                                  rather than quietly judge it by vibes."
 say ""
 say "  All three are already filed in .agent-development/PENDING-HUMAN-ACTIONS.md."
 
-head1 "YOUR FIRST COMMAND TO CLAUDE CODE"
-say ""
+rt_head "YOUR FIRST COMMAND TO CLAUDE CODE"
 say "  cd $TARGET && claude"
 say ""
 say "  Then paste exactly this:"
 say ""
-say "      Read .context/CLAUDE.md, .context/SPEC.md and .context/MILESTONES.md."
-say "      Confirm you understand the four-directory ownership partition and the"
-say "      two human stop points, then run milestone M0."
+say "      Read .context/CLAUDE.md and .context/TEMPLATE.md. SPEC.md and"
+say "      MILESTONES.md are placeholders -- interview me, then write them from"
+say "      TEMPLATE.md. Invent nothing: if you do not know a requirement or a"
+say "      verify command, ask me or leave a marked TODO(human). Stop when they"
+say "      are written, before running anything."
 say ""
-say "  If M0 does not exist yet, say 'propose an M0 with two WIN rows and stop'"
-say "  instead -- it will write the milestone and wait for you, which is the"
-say "  cheapest way to see the gates work before you spend a real run on them."
-head1 "======================================================================"
+say "  It will come back with a draft SPEC and a first milestone for you to"
+say "  correct. Keep M0 small -- two WIN rows is plenty. Seeing the gates fire"
+say "  on something trivial is far cheaper than meeting them mid-milestone."
+printf '\n'
+rt_rule
+printf '\n'
 
 if [ "$VERIFY_RC" != "0" ] && [ "$RUN_VERIFY" = "1" ] && [ "$VERIFY_STATE" = "FAIL" ]; then
   exit 1

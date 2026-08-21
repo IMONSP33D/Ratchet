@@ -79,6 +79,17 @@
 .PARAMETER SkipVerify
     Do not run test_hooks.py at the end.
 
+.PARAMETER Quiet
+    Errors and the final summary only.
+
+.PARAMETER NoColor
+    Never emit colour. The NO_COLOR environment variable does the same, and
+    colour is suppressed automatically when output is redirected.
+
+.PARAMETER Ascii
+    Plain ASCII frames; no box-drawing characters. RATCHET_ASCII does the same.
+    This is also what a console that refuses UTF-8 output gets automatically.
+
 .EXAMPLE
     .\install.ps1 -Target ..\my-repo -Stack python-pytest -ProjectName "My Repo"
 
@@ -103,7 +114,10 @@ param(
     [switch]   $Force,
     [switch]   $Uninstall,
     [switch]   $SubstituteOnly,
-    [switch]   $SkipVerify
+    [switch]   $SkipVerify,
+    [switch]   $Quiet,
+    [switch]   $NoColor,
+    [switch]   $Ascii
 )
 
 # StrictMode 1.0, not 2.0 or Latest. 1.0 catches the bug that actually bites a
@@ -116,22 +130,460 @@ $ErrorActionPreference = 'Continue'   # NOT Stop: a failed optional step is
                                       # reported, never allowed to abort a
                                       # half-finished install silently.
 
-$RtInstallerVersion = '1.0.0'
+$RtInstallerVersion = "1.1.0"
 $script:Warnings    = 0
 $script:MissingFiles = New-Object System.Collections.Generic.List[string]
 $script:HostFatal   = $false
 
 # --------------------------------------------------------------- output ----
-function Write-Head { param([string]$Text) Write-Host ''; Write-Host $Text -ForegroundColor White }
-function Write-Ok   { param([string]$Text) Write-Host ('  ok    ' + $Text) -ForegroundColor Green }
-function Write-Info { param([string]$Text) Write-Host ('  ..    ' + $Text) }
+# PRESENTATION LAYER. It draws; it decides nothing. The rules it obeys, because
+# an installer whose chrome breaks the install is worse than an ugly installer:
+#
+#   * PowerShell 5.1 constructs only. No ternary, no null-coalescing, no
+#     -join over a possibly-$null value, no $PSStyle.
+#   * Every capability is probed inside try/catch and every probe has a working
+#     answer for "no".
+#   * NOT ONE NON-ASCII LITERAL APPEARS IN THIS FILE. PowerShell 5.1 reads a
+#     BOM-less script as the machine's ANSI code page, so a literal box-drawing
+#     character in the source would be mangled before it ever reached the
+#     console -- and this file is deliberately saved without a BOM. Every frame
+#     glyph is therefore built from a [char] code point at runtime.
+#   * A legacy console (code page 437/850/1252) gets ASCII frames. We ASK for
+#     UTF-8 output and then CHECK whether we got it; a refusal costs nothing
+#     but plainer boxes.
+#   * Redirected output gets no colour and no box-drawing at all, so a captured
+#     install log is readable text.
+
+$script:RtQuiet      = $false
+$script:RtAscii      = $false
+$script:RtNoColor    = $false
+$script:RtWidth      = 80
+$script:RtColor      = 'none'      # 'ansi256' | 'host' | 'none'
+$script:RtRedirected = $true
+$script:RtUnicode    = $false
+$script:RtEsc        = [string][char]27
+$script:RtReset      = ''
+$script:RtAfterHead  = $false
+$script:RtPhaseTotal = 7
+$script:RtSlowText   = ''
+
+function Initialize-RtStyle {
+    # --- is anything but a console reading this? -----------------------------
+    # On failure we assume redirected, which is the conservative answer: it
+    # costs colour, never correctness.
+    $script:RtRedirected = $true
+    try { $script:RtRedirected = [Console]::IsOutputRedirected } catch { $script:RtRedirected = $true }
+
+    # --- width ---------------------------------------------------------------
+    # One column of headroom: a Windows console that receives exactly
+    # WindowSize.Width characters wraps and leaves a blank line behind.
+    $cw = 0
+    $real = $false
+    if (-not $script:RtRedirected) {
+        try {
+            $cw = $Host.UI.RawUI.WindowSize.Width
+            if ($null -ne $cw -and $cw -ge 40) { $real = $true }
+        } catch { $real = $false }
+    }
+    if ($real) {
+        $w = $cw - 1
+        if ($w -gt 100) { $w = 100 }
+        if ($w -lt 40)  { $w = 40 }
+    } else {
+        $w = 80
+    }
+    $script:RtWidth = $w
+
+    # --- UTF-8 output, where the console will take it ------------------------
+    if (-not $script:RtRedirected) {
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+    }
+    $script:RtUnicode = $false
+    if (-not $script:RtAscii -and -not $env:RATCHET_ASCII -and -not $script:RtRedirected) {
+        try {
+            if ([Console]::OutputEncoding.CodePage -eq 65001) { $script:RtUnicode = $true }
+        } catch { $script:RtUnicode = $false }
+    }
+
+    # --- colour --------------------------------------------------------------
+    $script:RtColor = 'none'
+    if (-not $script:RtRedirected -and -not $env:NO_COLOR -and -not $script:RtNoColor) {
+        if ($env:TERM -ne 'dumb') {
+            # Write-Host -ForegroundColor is the only colouring a legacy conhost
+            # is guaranteed to render, so it is the floor. ANSI 256 is used only
+            # where virtual-terminal processing is a given.
+            $script:RtColor = 'host'
+            $vt = $false
+            if ($PSVersionTable.PSVersion.Major -ge 6) { $vt = $true }
+            if ($env:WT_SESSION) { $vt = $true }
+            if ($env:TERM -and $env:TERM -ne 'dumb') { $vt = $true }
+            if ($vt) { $script:RtColor = 'ansi256' }
+        }
+    }
+    if ($script:RtColor -eq 'ansi256') { $script:RtReset = $script:RtEsc + '[0m' }
+    else                               { $script:RtReset = '' }
+
+    # --- glyphs --------------------------------------------------------------
+    if ($script:RtUnicode) {
+        $script:GOk    = [string][char]0x2714
+        $script:GWarn  = '!'
+        $script:GErr   = [string][char]0x2718
+        $script:GInfo  = [string][char]0x00B7
+        $script:GDry   = [string][char]0x25E6
+        $script:GSub   = [string][char]0x25AA
+        $script:BH     = [string][char]0x2500
+        $script:BV     = [string][char]0x2502
+        $script:BTL    = [string][char]0x250C
+        $script:BTR    = [string][char]0x2510
+        $script:BBL    = [string][char]0x2514
+        $script:BBR    = [string][char]0x2518
+        $script:DH     = [string][char]0x2550
+        $script:DV     = [string][char]0x2551
+        $script:DTL    = [string][char]0x2554
+        $script:DTR    = [string][char]0x2557
+        $script:DBL    = [string][char]0x255A
+        $script:DBR    = [string][char]0x255D
+        $script:RH     = [string][char]0x2501
+        $script:RtLead = [string][char]0x00B7
+        $script:BarF   = [string][char]0x25B0
+        $script:BarE   = [string][char]0x25B1
+    } else {
+        $script:GOk    = '+'
+        $script:GWarn  = '!'
+        $script:GErr   = 'x'
+        $script:GInfo  = '.'
+        $script:GDry   = 'o'
+        $script:GSub   = '*'
+        $script:BH     = '-'
+        $script:BV     = '|'
+        $script:BTL    = '+'
+        $script:BTR    = '+'
+        $script:BBL    = '+'
+        $script:BBR    = '+'
+        $script:DH     = '='
+        $script:DV     = '|'
+        $script:DTL    = '+'
+        $script:DTR    = '+'
+        $script:DBL    = '+'
+        $script:DBR    = '+'
+        $script:RH     = '='
+        $script:RtLead = '.'
+        $script:BarF   = '#'
+        $script:BarE   = '-'
+    }
+}
+
+function Get-RtAnsi {
+    param([string]$Name)
+    if ($script:RtColor -ne 'ansi256') { return '' }
+    $e = $script:RtEsc
+    switch ($Name) {
+        'ok'   { return ($e + '[38;5;78m') }
+        'warn' { return ($e + '[38;5;214m') }
+        'err'  { return ($e + '[38;5;203m') }
+        'acc'  { return ($e + '[38;5;38m') }
+        'dim'  { return ($e + '[38;5;243m') }
+        'ttl'  { return ($e + '[1;38;5;231m') }
+        'bold' { return ($e + '[1m') }
+    }
+    return ''
+}
+
+function Get-RtHostColor {
+    param([string]$Name)
+    switch ($Name) {
+        'ok'   { return 'Green' }
+        'warn' { return 'Yellow' }
+        'err'  { return 'Red' }
+        'acc'  { return 'Cyan' }
+        'dim'  { return 'DarkGray' }
+        'ttl'  { return 'White' }
+        'bold' { return 'White' }
+    }
+    return ''
+}
+
+# A line is a list of {text, colour-name} parts. Building it this way is what
+# lets the same layout render through ANSI escapes on a modern terminal and
+# through Write-Host -ForegroundColor on a legacy console, with no branch in
+# any of the callers.
+function New-RtPart {
+    param([string]$Text, [string]$Color = '')
+    return @{ t = $Text; c = $Color }
+}
+
+function Write-RtParts {
+    param([object[]]$Parts)
+    if ($null -eq $Parts) { return }
+    if ($script:RtColor -eq 'host') {
+        foreach ($p in $Parts) {
+            $fc = Get-RtHostColor $p.c
+            if ($fc -ne '') { Write-Host -NoNewline $p.t -ForegroundColor $fc }
+            else            { Write-Host -NoNewline $p.t }
+        }
+        Write-Host ''
+        return
+    }
+    $s = ''
+    foreach ($p in $Parts) {
+        $code = Get-RtAnsi $p.c
+        if ($code -ne '') { $s = $s + $code + $p.t + $script:RtReset }
+        else              { $s = $s + $p.t }
+    }
+    Write-Host $s
+}
+
+function Get-RtRep {
+    param([string]$Unit, [int]$Count)
+    if ($Count -le 0) { return '' }
+    if ($null -eq $Unit -or $Unit -eq '') { return '' }
+    return ($Unit * $Count)
+}
+
+# Fit an ASCII string into exactly N columns: padded when short, truncated with
+# an ellipsis when long. Nothing that goes through here is ever wide enough to
+# push a border out of alignment.
+function Get-RtFit {
+    param([string]$Text, [int]$Width)
+    if ($null -eq $Text) { $Text = '' }
+    if ($Width -le 0) { return '' }
+    if ($Text.Length -gt $Width) {
+        if ($Width -gt 4) { return ($Text.Substring(0, $Width - 3) + '...') }
+        return $Text.Substring(0, $Width)
+    }
+    return $Text.PadRight($Width)
+}
+
+# Truncate (never pad) so a header title cannot push a border past the width.
+function Get-RtClip {
+    param([string]$Text, [int]$Width)
+    if ($null -eq $Text) { $Text = '' }
+    if ($Width -le 0) { return '' }
+    if ($Text.Length -gt $Width) {
+        if ($Width -gt 4) { return ($Text.Substring(0, $Width - 3) + '...') }
+        return $Text.Substring(0, $Width)
+    }
+    return $Text
+}
+
+# label ......................... status, right-flush and aligned whatever the
+# label length is. A label with no room for a leader degrades to glyph + text
+# rather than wrapping mid-word or pushing the status off the edge.
+function Write-RtStatus {
+    param([string]$Color, [string]$Glyph, [string]$Status, [string]$Text)
+    if ($null -eq $Text) { $Text = '' }
+    $avail = $script:RtWidth - 11
+    $parts = @()
+    $parts += (New-RtPart '  ')
+    $parts += (New-RtPart $Glyph $Color)
+    $parts += (New-RtPart '  ')
+    if ($Status -ne '' -and $Text.Length -le ($avail - 3)) {
+        $parts += (New-RtPart $Text)
+        $parts += (New-RtPart (' ' + (Get-RtRep $script:RtLead ($avail - $Text.Length)) + ' ') 'dim')
+        $parts += (New-RtPart $Status.PadLeft(4) $Color)
+    } else {
+        $parts += (New-RtPart $Text)
+    }
+    Write-RtParts $parts
+    $script:RtAfterHead = $false
+}
+
+function Write-Ok   { param([string]$Text) if ($script:RtQuiet) { return }; Write-RtStatus 'ok'   $script:GOk   'ok'   $Text }
+function Write-Info { param([string]$Text) if ($script:RtQuiet) { return }; Write-RtStatus 'dim'  $script:GInfo ''     $Text }
+function Write-Dry  { param([string]$Text) if ($script:RtQuiet) { return }; Write-RtStatus 'warn' $script:GDry  'dry'  $Text }
+function Write-Pass { param([string]$Text) Write-RtStatus 'ok'  $script:GOk  'PASS' $Text }
+function Write-Fail { param([string]$Text) Write-RtStatus 'err' $script:GErr 'FAIL' $Text }
 function Write-Warn {
     param([string]$Text)
-    Write-Host ('  WARN  ' + $Text) -ForegroundColor Yellow
     $script:Warnings++
+    Write-RtStatus 'warn' $script:GWarn 'warn' $Text
 }
-function Write-Fail { param([string]$Text) Write-Host ('  FAIL  ' + $Text) -ForegroundColor Red }
+# The continuation line under a warning or a failure. Its indent is part of the
+# message's shape, so it is left exactly as the author wrote it.
 function Write-Cont { param([string]$Text) Write-Host ('        ' + $Text) }
+
+# --- rules, headers ---------------------------------------------------------
+function Write-RtRule {
+    param([string]$Color = 'dim')
+    $parts = @()
+    $parts += (New-RtPart (Get-RtRep $script:BH $script:RtWidth) $Color)
+    Write-RtParts $parts
+}
+
+# A numbered phase header: the reader always knows where they are and how much
+# is left. The bar is dropped on a narrow console rather than wrapped.
+function Write-RtPhase {
+    param([int]$Number, [string]$Title)
+    if ($script:RtQuiet) { return }
+    $tag = '[' + [string]$Number + '/' + [string]$script:RtPhaseTotal + ']'
+    $barW = 12
+    $barBlock = 0
+    if ($script:RtWidth -ge 66) { $barBlock = $barW + 1 }
+    $cap = $script:RtWidth - 7 - $tag.Length - $barBlock
+    if ($cap -lt 8) { $cap = 8 }
+    $Title = Get-RtClip $Title $cap
+    $fill = $script:RtWidth - 5 - $tag.Length - $Title.Length - $barBlock
+    if ($fill -lt 2) {
+        $barBlock = 0
+        $fill = $script:RtWidth - 5 - $tag.Length - $Title.Length
+    }
+    if ($fill -lt 2) { $fill = 2 }
+    Write-Host ''
+    $parts = @()
+    $parts += (New-RtPart (Get-RtRep $script:RH 2) 'dim')
+    $parts += (New-RtPart (' ' + $tag) 'acc')
+    $parts += (New-RtPart (' ' + $Title) 'ttl')
+    $parts += (New-RtPart (' ' + (Get-RtRep $script:RH $fill)) 'dim')
+    if ($barBlock -gt 0) {
+        $filled = [int][Math]::Floor(($Number * $barW) / $script:RtPhaseTotal)
+        if ($filled -gt $barW) { $filled = $barW }
+        if ($filled -lt 0)     { $filled = 0 }
+        $parts += (New-RtPart (' ' + (Get-RtRep $script:BarF $filled)) 'acc')
+        $parts += (New-RtPart (Get-RtRep $script:BarE ($barW - $filled)) 'dim')
+    }
+    Write-RtParts $parts
+    Write-Host ''
+    $script:RtAfterHead = $true
+}
+
+# An unnumbered header, for the paths that are not the seven-phase install:
+# uninstall, -SubstituteOnly, and the closing blocks. Never suppressed by
+# -Quiet, because the only things it heads are summaries.
+function Write-RtHead {
+    param([string]$Title)
+    $Title = Get-RtClip $Title ($script:RtWidth - 6)
+    $fill = $script:RtWidth - 4 - $Title.Length
+    if ($fill -lt 2) { $fill = 2 }
+    Write-Host ''
+    $parts = @()
+    $parts += (New-RtPart (Get-RtRep $script:RH 2) 'dim')
+    $parts += (New-RtPart (' ' + $Title) 'ttl')
+    $parts += (New-RtPart (' ' + (Get-RtRep $script:RH $fill)) 'dim')
+    Write-RtParts $parts
+    Write-Host ''
+    $script:RtAfterHead = $true
+}
+
+# A step inside a phase. Its own blank line is dropped when it lands directly
+# under a phase header, so the two never stack into a gap.
+function Write-RtSub {
+    param([string]$Title)
+    if ($script:RtQuiet) { return }
+    if (-not $script:RtAfterHead) { Write-Host '' }
+    $parts = @()
+    $parts += (New-RtPart '  ')
+    $parts += (New-RtPart $script:GSub 'acc')
+    $parts += (New-RtPart ('  ' + $Title) 'ttl')
+    Write-RtParts $parts
+    $script:RtAfterHead = $true
+}
+
+# Kept so that any caller still saying Write-Head lands somewhere sensible.
+function Write-Head { param([string]$Text) Write-RtSub $Text }
+
+# --- boxes ------------------------------------------------------------------
+# Every border is built from a known column count, never from a measurement of
+# a glyph, so a frame cannot come out ragged.
+function Write-RtBoxTop {
+    param([string]$Style = 'light', [string]$Title = '')
+    if ($Style -eq 'double') { $h = $script:DH; $tl = $script:DTL; $tr = $script:DTR }
+    else                     { $h = $script:BH; $tl = $script:BTL; $tr = $script:BTR }
+    $parts = @()
+    if ($Title -ne '') {
+        $Title = Get-RtClip $Title ($script:RtWidth - 7)
+        $fill = $script:RtWidth - 5 - $Title.Length
+        if ($fill -lt 1) { $fill = 1 }
+        $parts += (New-RtPart ($tl + $h) 'acc')
+        $parts += (New-RtPart (' ' + $Title + ' ') 'ttl')
+        $parts += (New-RtPart ((Get-RtRep $h $fill) + $tr) 'acc')
+    } else {
+        $parts += (New-RtPart ($tl + (Get-RtRep $h ($script:RtWidth - 2)) + $tr) 'acc')
+    }
+    Write-RtParts $parts
+}
+
+function Write-RtBoxBottom {
+    param([string]$Style = 'light')
+    if ($Style -eq 'double') { $h = $script:DH; $bl = $script:DBL; $br = $script:DBR }
+    else                     { $h = $script:BH; $bl = $script:BBL; $br = $script:BBR }
+    $parts = @()
+    $parts += (New-RtPart ($bl + (Get-RtRep $h ($script:RtWidth - 2)) + $br) 'acc')
+    Write-RtParts $parts
+}
+
+function Write-RtBoxLine {
+    param([string]$Style = 'light', [string]$Text = '', [string]$Color = '')
+    if ($Style -eq 'double') { $v = $script:DV } else { $v = $script:BV }
+    $parts = @()
+    $parts += (New-RtPart $v 'acc')
+    $parts += (New-RtPart (' ' + (Get-RtFit $Text ($script:RtWidth - 4)) + ' ') $Color)
+    $parts += (New-RtPart $v 'acc')
+    Write-RtParts $parts
+}
+
+function Write-RtBoxKv {
+    param([string]$Style = 'light', [string]$Key = '', [string]$Value = '', [string]$Color = 'bold')
+    if ($Style -eq 'double') { $v = $script:DV } else { $v = $script:BV }
+    $kw = 18
+    $parts = @()
+    $parts += (New-RtPart $v 'acc')
+    $parts += (New-RtPart ('   ' + (Get-RtFit $Key $kw)) 'dim')
+    $parts += (New-RtPart ('  ' + (Get-RtFit $Value ($script:RtWidth - $kw - 8))) $Color)
+    $parts += (New-RtPart ' ')
+    $parts += (New-RtPart $v 'acc')
+    Write-RtParts $parts
+}
+
+function Write-RtBanner {
+    if ($script:RtQuiet) { return }
+    Write-Host ''
+    Write-RtBoxTop 'double'
+    Write-RtBoxLine 'double' ''
+    # The one line drawn by hand rather than by Write-RtBoxLine, because it
+    # carries two colours. Its padding is still derived from an ASCII twin of
+    # the line, so it cannot disagree with the border.
+    $plain = '  R A T C H E T   v' + $RtInstallerVersion
+    $pad = $script:RtWidth - 4 - $plain.Length
+    if ($pad -lt 0) { $pad = 0 }
+    $parts = @()
+    $parts += (New-RtPart $script:DV 'acc')
+    $parts += (New-RtPart '   R A T C H E T' 'ttl')
+    $parts += (New-RtPart ('   v' + $RtInstallerVersion) 'acc')
+    $parts += (New-RtPart ((Get-RtRep ' ' $pad) + ' '))
+    $parts += (New-RtPart $script:DV 'acc')
+    Write-RtParts $parts
+    Write-RtBoxLine 'double' '  the run moves forward or it stops; it never quietly slides back' 'dim'
+    if ($WhatIfPreference) {
+        Write-RtBoxLine 'double' ''
+        Write-RtBoxLine 'double' '  WHATIF RUN -- every action is printed, and nothing is written' 'warn'
+    }
+    Write-RtBoxLine 'double' ''
+    Write-RtBoxBottom 'double'
+}
+
+# --- the slow steps ---------------------------------------------------------
+# Two steps here (the hook suite, then the postcondition baseline that re-runs
+# it) take long enough that silence is indistinguishable from a hang. This uses
+# Write-Progress rather than a spun-up runspace: it is built in, it costs
+# nothing, it cannot leave an orphaned thread behind if the script dies, and it
+# writes to the progress stream -- so a captured log gets the plain "working"
+# line and none of the animation.
+function Start-RtSlowStep {
+    param([string]$Text)
+    $script:RtSlowText = $Text
+    if ($script:RtQuiet) { return }
+    Write-RtStatus 'dim' $script:GInfo '' ($Text + ' ... working')
+    if (-not $script:RtRedirected) {
+        try { Write-Progress -Activity 'Ratchet install' -Status $Text -PercentComplete 0 } catch { }
+    }
+}
+
+function Stop-RtSlowStep {
+    if (-not $script:RtRedirected) {
+        try { Write-Progress -Activity 'Ratchet install' -Status 'done' -Completed } catch { }
+    }
+    $script:RtSlowText = ''
+}
 
 # -WhatIf plumbing. $PSCmdlet.ShouldProcess is the idiomatic call, but it is an
 # automatic variable of the SCRIPT's advanced-function scope, and reaching it
@@ -142,7 +594,7 @@ function Write-Cont { param([string]$Text) Write-Host ('        ' + $Text) }
 function Confirm-Change {
     param([string]$Item, [string]$Action)
     if ($WhatIfPreference) {
-        Write-Host ('  DRY   ' + $Action + ': ' + $Item) -ForegroundColor Yellow
+        Write-Dry ($Action + ': ' + $Item)
         return $false
     }
     return $true
@@ -150,19 +602,39 @@ function Confirm-Change {
 
 function Stop-Install {
     param([string]$Reason)
+    Stop-RtSlowStep
     Write-Host ''
-    Write-Host ('install refused: ' + $Reason) -ForegroundColor Red
+    # @() forces an array even for a single-line reason; without it $lines[0]
+    # would index the first CHARACTER of the string.
+    $lines = @($Reason -split "`r?`n")
+    $parts = @()
+    $parts += (New-RtPart '  ')
+    $parts += (New-RtPart $script:GErr 'err')
+    $parts += (New-RtPart '  ')
+    $parts += (New-RtPart 'install refused:' 'err')
+    $parts += (New-RtPart (' ' + $lines[0]))
+    Write-RtParts $parts
+    if ($lines.Length -gt 1) {
+        for ($i = 1; $i -lt $lines.Length; $i++) { Write-Host ('   ' + $lines[$i]) }
+    }
     Write-Host ''
     exit 2
 }
 
 # Approved-verb helper names below: Test-*, Get-*, Copy-*, Write-*, Install-*,
-# Remove-*, Invoke-*, Confirm-*. PSScriptAnalyzer clean on verbs.
+# Remove-*, Invoke-*, Confirm-*, Start-*, Stop-*, New-*, Initialize-*.
+# PSScriptAnalyzer clean on verbs.
+
+$script:RtQuiet   = [bool]$Quiet
+$script:RtAscii   = [bool]$Ascii
+$script:RtNoColor = [bool]$NoColor
+Initialize-RtStyle
+Write-RtBanner
 
 # ===========================================================================
 # SECTION 1 -- HOST CHECKS, first, before anything on disk is touched.
 # ===========================================================================
-Write-Head ("RATCHET installer $RtInstallerVersion -- host checks (Windows)")
+Write-RtPhase 1 'Host checks'
 
 # --- PowerShell ------------------------------------------------------------
 Write-Ok ("PowerShell $($PSVersionTable.PSVersion)")
@@ -343,7 +815,7 @@ if (Test-Command 'gh') {
 # ===========================================================================
 # SECTION 2 -- TARGET VALIDATION
 # ===========================================================================
-Write-Head 'Target'
+Write-RtPhase 2 'Target'
 
 $SrcDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HarnessDir = Join-Path $SrcDir 'harness'
@@ -411,7 +883,13 @@ if ($dirtyTracked.Count -gt 0) {
         Write-Warn 'tracked files are modified; continuing (-Force/-WhatIf/-SubstituteOnly/-Uninstall).'
     } else {
         Write-Host ''
-        Write-Host 'install refused: the target has modified or staged tracked files.' -ForegroundColor Red
+        $refuse = @()
+        $refuse += (New-RtPart '  ')
+        $refuse += (New-RtPart $script:GErr 'err')
+        $refuse += (New-RtPart '  ')
+        $refuse += (New-RtPart 'install refused:' 'err')
+        $refuse += (New-RtPart ' the target has modified or staged tracked files.')
+        Write-RtParts $refuse
         Write-Host ''
         $dirtyTracked | Select-Object -First 20 | ForEach-Object { Write-Host ('    ' + $_) }
         Write-Host ''
@@ -468,10 +946,18 @@ foreach ($t in $stackTools[$Stack]) {
 
 if ($script:HostFatal) {
     Write-Host ''
-    Write-Host 'install refused: one or more required host tools are missing.' -ForegroundColor Red
+    Write-RtRule 'err'
+    $refuse = @()
+    $refuse += (New-RtPart '  ')
+    $refuse += (New-RtPart $script:GErr 'err')
+    $refuse += (New-RtPart '  ')
+    $refuse += (New-RtPart 'install refused:' 'err')
+    $refuse += (New-RtPart ' one or more required host tools are missing.')
+    Write-RtParts $refuse
     Write-Host '  Nothing was written. Fix the FAIL lines above and re-run.'
     Write-Host '  Every one of them is a tool a SECURITY GATE needs, which is why this is'
     Write-Host '  a refusal and not a warning: a gate that cannot run has not passed.'
+    Write-RtRule 'err'
     Write-Host ''
     exit 2
 }
@@ -580,7 +1066,7 @@ function Copy-HarnessTree {
 # SECTION 4 -- UNINSTALL
 # ===========================================================================
 if ($Uninstall) {
-    Write-Head 'Uninstall'
+    Write-RtHead 'Uninstall'
     if (-not (Test-Path -LiteralPath $ManifestPath)) {
         Stop-Install @"
 no install manifest at .claude\.ratchet-install-manifest.
@@ -654,7 +1140,7 @@ no install manifest at .claude\.ratchet-install-manifest.
         }
     }
 
-    Write-Head 'Uninstall complete'
+    Write-RtHead 'Uninstall complete'
     Write-Host '  LEFT IN PLACE, deliberately -- this is your project''s work, not the harness:'
     Write-Host '    .context\                        your SPEC, MILESTONES, DECISIONS, archive'
     Write-Host '    .agent-development\              run retros, lessons, pending actions'
@@ -672,7 +1158,7 @@ no install manifest at .claude\.ratchet-install-manifest.
 # ===========================================================================
 # SECTION 5 -- INSTALL
 # ===========================================================================
-Write-Head 'Installing'
+Write-RtPhase 3 'Installing the harness'
 
 if (-not (Test-Path -LiteralPath $HarnessDir)) {
     Stop-Install @"
@@ -693,7 +1179,7 @@ if ((Test-Path -LiteralPath $ManifestPath) -and -not $WhatIfPreference) {
 
 $Ts = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmss') + 'Z'
 
-Write-Head 'Scaffolding the four-directory partition'
+Write-RtSub 'Scaffolding the four-directory partition'
 foreach ($d in @(
     '.claude/hooks/stack', '.claude/agents',
     '.context/archive/decisions',
@@ -707,12 +1193,12 @@ Write-Ok '.pipeline\ (run scratch, mostly gitignored)'
 Write-Ok '.agent-development\ (learning loop, tracked, never pruned)'
 Write-Ok 'docs\evidence\, secrets\'
 
-Write-Head 'Copying the harness'
+Write-RtSub 'Copying the harness'
 Copy-HarnessTree '.claude/hooks'       'replace'
 Copy-HarnessTree '.claude/hooks/stack' 'replace'
 Copy-HarnessTree '.claude/agents'      'replace'
 
-Write-Head 'Human-owned contracts (.context\)'
+Write-RtSub 'Human-owned contracts (.context\)'
 $ctxSrc = Join-Path $HarnessDir '.context'
 if (Test-Path -LiteralPath $ctxSrc) {
     foreach ($f in (Get-ChildItem -LiteralPath $ctxSrc -File)) {
@@ -758,7 +1244,7 @@ if (Test-Path -LiteralPath $harnessClaude) {
     }
 }
 
-Write-Head 'Learning loop (.agent-development\)'
+Write-RtSub 'Learning loop (.agent-development\)'
 $devSrc = Join-Path $HarnessDir '.agent-development'
 if (Test-Path -LiteralPath $devSrc) {
     foreach ($f in (Get-ChildItem -LiteralPath $devSrc -File)) {
@@ -770,7 +1256,7 @@ Write-Ok '.agent-development\ seeded (existing files kept)'
 # ===========================================================================
 # SECTION 6 -- settings.json: MERGE, never overwrite
 # ===========================================================================
-Write-Head 'Permission surface (.claude\settings.json)'
+Write-RtPhase 4 'Permission surface'
 
 function Get-ShellVar {
     # Read one variable out of a bash config file by SOURCING it in bash.
@@ -968,7 +1454,7 @@ if (-not (Test-Path -LiteralPath $TemplatePath)) {
 # ===========================================================================
 # SECTION 7 -- executability and the bash record
 # ===========================================================================
-Write-Head 'Hook executability and the bash record'
+Write-RtSub 'Hook executability and the bash record'
 
 # There is no chmod on NTFS, and there does not need to be: Git-Bash and WSL
 # both run a .sh file handed to bash regardless of an execute bit, and Claude
@@ -1039,7 +1525,7 @@ if (-not $gaHave) {
 # ===========================================================================
 # SECTION 8 -- secrets, ACLs, and a VERIFIED gitignore
 # ===========================================================================
-Write-Head 'Escalation key and gitignore'
+Write-RtPhase 5 'Escalation key and gitignore'
 
 $GitIgnorePath = Join-Path $TargetPath '.gitignore'
 function Add-IgnoreLine {
@@ -1198,7 +1684,7 @@ if ($WhatIfPreference) {
 # SECTION 9 -- the domain interview
 # ===========================================================================
 if ($Domain -eq 'interactive' -and -not $WhatIfPreference) {
-    Write-Head 'Domain pack interview'
+    Write-RtSub 'Domain pack interview'
     $iv = Join-Path $TargetPath '.claude\hooks\interview.sh'
     if ((Test-Path -LiteralPath $iv) -and $script:BashPath) {
         Push-Location $TargetPath
@@ -1213,7 +1699,7 @@ if ($Domain -eq 'interactive' -and -not $WhatIfPreference) {
 # ===========================================================================
 # SECTION 10 -- brace-marker substitution
 # ===========================================================================
-Write-Head 'Substituting doctrine markers'
+Write-RtPhase 6 'Substituting doctrine markers'
 
 $domainSh = Join-Path $TargetPath '.claude\hooks\domain.config.sh'
 $stackSh  = Join-Path $TargetPath ".claude\hooks\stack\$Stack.sh"
@@ -1337,7 +1823,7 @@ if (-not $WhatIfPreference) {
 }
 
 if ($SubstituteOnly) {
-    Write-Head 'Substitution-only run complete'
+    Write-RtHead 'Substitution-only run complete'
     Write-Host '  Nothing else was touched.'
     exit 0
 }
@@ -1345,7 +1831,7 @@ if ($SubstituteOnly) {
 # ===========================================================================
 # SECTION 11 -- PENDING-HUMAN-ACTIONS
 # ===========================================================================
-Write-Head 'Pre-filing the three human actions'
+Write-RtSub 'Pre-filing the three human actions'
 $phaRel  = '.agent-development/PENDING-HUMAN-ACTIONS.md'
 $phaPath = Join-Path $TargetPath ($phaRel -replace '/', '\')
 $phaHave = $false
@@ -1388,7 +1874,7 @@ saying what they did. Nothing here is ever deleted; a closed row is evidence.
 $verifyRc = 0
 $verifyState = 'not run'
 if (-not $SkipVerify -and -not $WhatIfPreference) {
-    Write-Head 'Install verification (test_hooks.py)'
+    Write-RtPhase 7 'Install verification'
     $th = Join-Path $TargetPath '.claude\hooks\test_hooks.py'
     if (Test-Path -LiteralPath $th) {
         Push-Location $TargetPath
@@ -1396,17 +1882,28 @@ if (-not $SkipVerify -and -not $WhatIfPreference) {
         $pyExe = $pyParts[0]
         $pyPre = @()
         if ($pyParts.Length -gt 1) { $pyPre = $pyParts[1..($pyParts.Length - 1)] }
+        Start-RtSlowStep 'running the hook suite (this is the slow step)'
         $out = & $pyExe @pyPre '.claude/hooks/test_hooks.py' 2>&1
         $verifyRc = $LASTEXITCODE
+        Stop-RtSlowStep
         Pop-Location
         if ($verifyRc -eq 0) {
             $verifyState = 'PASS'
-            Write-Host '  PASS  the hook suite is green on this host.' -ForegroundColor Green
-            $out | Select-Object -Last 5 | ForEach-Object { Write-Host ('          ' + $_) }
+            Write-Pass 'the hook suite is green on this host.'
+            $out | Select-Object -Last 5 | ForEach-Object {
+                $tailParts = @()
+                $tailParts += (New-RtPart ('       ' + $_) 'dim')
+                Write-RtParts $tailParts
+            }
         } else {
             $verifyState = 'FAIL'
             Write-Host ''
-            Write-Host '  ================ INSTALL VERIFICATION FAILED ================' -ForegroundColor Red
+            Write-RtRule 'err'
+            $vfParts = @()
+            $vfParts += (New-RtPart '  ')
+            $vfParts += (New-RtPart 'INSTALL VERIFICATION FAILED' 'err')
+            Write-RtParts $vfParts
+            Write-Host ''
             Write-Host "  test_hooks.py exited $verifyRc. The harness is installed but at least"
             Write-Host '  one gate does not behave the way its own tests say it should.'
             Write-Host ''
@@ -1416,7 +1913,7 @@ if (-not $SkipVerify -and -not $WhatIfPreference) {
             Write-Host '  gate you cannot reason about, and the whole value of this harness is'
             Write-Host '  that a refusal means something. Re-run the suite yourself:'
             Write-Host "      cd $TargetPath ; $($script:Py) .claude\hooks\test_hooks.py"
-            Write-Host '  ============================================================' -ForegroundColor Red
+            Write-RtRule 'err'
             Write-Host ''
         }
     } else {
@@ -1446,8 +1943,10 @@ if (-not $SkipVerify -and -not $WhatIfPreference) {
     }
     elseif ((Test-Path -LiteralPath $approve) -and $script:BashPath) {
         Push-Location $TargetPath
+        Start-RtSlowStep 'recording the control-layer postcondition baseline (runs the suite again)'
         & $script:BashPath -c './.claude/hooks/approve.sh --postcondition-baseline' *> $null
         $rc = $LASTEXITCODE
+        Stop-RtSlowStep
         Pop-Location
         if ($rc -eq 0) { Write-Ok 'recorded the control-layer postcondition baseline' }
         else {
@@ -1474,27 +1973,54 @@ if (-not $WhatIfPreference) {
 # ===========================================================================
 # SECTION 14 -- REPORT
 # ===========================================================================
-Write-Head '======================================================================'
 if ($WhatIfPreference) {
-    Write-Host '  WHATIF COMPLETE. Nothing above was written.'
-    Write-Host '  Re-run without -WhatIf to apply.'
-    Write-Head '======================================================================'
+    Write-Host ''
+    Write-RtBoxTop 'light' ("RATCHET $RtInstallerVersion -- WHATIF")
+    Write-RtBoxLine 'light' ''
+    Write-RtBoxLine 'light' '  WHATIF COMPLETE. Nothing above was written.' 'warn'
+    Write-RtBoxLine 'light' '  Re-run without -WhatIf to apply.'
+    Write-RtBoxLine 'light' ''
+    Write-RtBoxKv 'light' 'would install to' $TargetPath
+    Write-RtBoxKv 'light' 'project name'     $ProjectName
+    Write-RtBoxKv 'light' 'stack pack'       $Stack
+    Write-RtBoxKv 'light' 'domain pack'      $Domain
+    Write-RtBoxKv 'light' 'base branch'      $BaseBranch
+    Write-RtBoxKv 'light' 'escalation'       $EscalationMode
+    Write-RtBoxKv 'light' 'warnings'         ([string]$script:Warnings)
+    Write-RtBoxLine 'light' ''
+    Write-RtBoxBottom 'light'
+    Write-Host ''
     exit 0
 }
 
-Write-Host "  Ratchet $RtInstallerVersion installed into: $TargetPath"
-Write-Host "    project name    $ProjectName"
-Write-Host "    stack pack      $Stack"
-Write-Host "    domain pack     $Domain"
-Write-Host "    base branch     $BaseBranch"
-Write-Host "    escalation      $EscalationMode"
-Write-Host "    hook shell      $($script:BashKind) -- $($script:BashPath)"
-Write-Host "    python          $($script:Py)"
-Write-Host "    verification    $verifyState"
-Write-Host "    warnings        $($script:Warnings)"
+# Colour follows the value and nothing else: this is a lookup for the table
+# below, not a decision. $verifyState was settled in section 12.
+$vCol = 'dim'
+if ($verifyState -eq 'PASS')          { $vCol = 'ok' }
+elseif ($verifyState -like 'FAIL*')   { $vCol = 'err' }
+elseif ($verifyState -like 'SKIPPED*'){ $vCol = 'warn' }
+elseif ($verifyState -like 'TIMED*')  { $vCol = 'warn' }
+$wCol = 'ok'
+if ($script:Warnings -gt 0) { $wCol = 'warn' }
+
+Write-Host ''
+Write-RtBoxTop 'light' ("RATCHET $RtInstallerVersion -- INSTALLED")
+Write-RtBoxLine 'light' ''
+Write-RtBoxKv 'light' 'installed into' $TargetPath
+Write-RtBoxKv 'light' 'project name'   $ProjectName
+Write-RtBoxKv 'light' 'stack pack'     $Stack
+Write-RtBoxKv 'light' 'domain pack'    $Domain
+Write-RtBoxKv 'light' 'base branch'    $BaseBranch
+Write-RtBoxKv 'light' 'escalation'     $EscalationMode
+Write-RtBoxKv 'light' 'hook shell'     ("$($script:BashKind) -- $($script:BashPath)")
+Write-RtBoxKv 'light' 'python'         ([string]$script:Py)
+Write-RtBoxKv 'light' 'verification'   $verifyState $vCol
+Write-RtBoxKv 'light' 'warnings'       ([string]$script:Warnings) $wCol
+Write-RtBoxLine 'light' ''
+Write-RtBoxBottom 'light'
 
 if ($script:MissingFiles.Count -gt 0) {
-    Write-Head 'Files the harness source did not contain'
+    Write-RtHead 'Files the harness source did not contain'
     foreach ($m in ($script:MissingFiles | Sort-Object -Unique)) { Write-Host "    missing: $m" }
     Write-Host ''
     Write-Host '  Each of those is a component that is now NOT installed. If this is a'
@@ -1502,8 +2028,7 @@ if ($script:MissingFiles.Count -gt 0) {
     Write-Host '  incomplete and you should not run a milestone against it.'
 }
 
-Write-Head 'THREE THINGS ONLY A HUMAN CAN DO'
-Write-Host ''
+Write-RtHead 'THREE THINGS ONLY A HUMAN CAN DO'
 Write-Host '  1. PAGER. Set the webhook so a stopped run reaches you.'
 Write-Host '         setx RATCHET_WEBHOOK_URL "https://hooks.slack.com/services/..."'
 Write-Host '     (setx persists it for new terminals; the current one needs a restart.)'
@@ -1526,8 +2051,7 @@ Write-Host '                                  rather than quietly judge it by vi
 Write-Host ''
 Write-Host '  All three are already filed in .agent-development\PENDING-HUMAN-ACTIONS.md.'
 
-Write-Head 'YOUR FIRST COMMAND TO CLAUDE CODE'
-Write-Host ''
+Write-RtHead 'YOUR FIRST COMMAND TO CLAUDE CODE'
 Write-Host "  cd $TargetPath"
 Write-Host '  claude'
 Write-Host ''
@@ -1540,7 +2064,9 @@ Write-Host ''
 Write-Host '  If M0 does not exist yet, say "propose an M0 with two WIN rows and stop"'
 Write-Host '  instead -- it will write the milestone and wait for you, which is the'
 Write-Host '  cheapest way to see the gates work before you spend a real run on them.'
-Write-Head '======================================================================'
+Write-Host ''
+Write-RtRule
+Write-Host ''
 
 if ($verifyState -eq 'FAIL') { exit 1 }
 exit 0

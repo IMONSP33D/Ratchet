@@ -53,7 +53,7 @@ and note it in your report — do not redefine anything that is listed.
       check_done.py check_narrative.py proof_map.py run_metrics.py
       test_hooks.py
   .context/                     # HUMAN-OWNED contracts (Tier 2b)
-    CLAUDE.md PIPELINE.md CONVENTIONS.md SPEC.md MILESTONES.md DECISIONS.md
+    CLAUDE.md PIPELINE.md TEMPLATE.md SPEC.md MILESTONES.md DECISIONS.md
     archive/decisions/
   .pipeline/                    # RUN-SCOPED agent scratch (mostly gitignored)
   .agent-development/           # LEARNING LOOP (tracked, never pruned)

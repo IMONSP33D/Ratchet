@@ -398,6 +398,12 @@ class RepoCase(unittest.TestCase):
             if not (self.hooks_dir() / lib).is_file():
                 raise unittest.SkipTest("not built yet: %s" % lib)
         pre = "".join('. "%s/%s" >/dev/null 2>&1 || exit 97; ' % (self.hooks_dir(), l) for l in libs)
+        # ratchet.config.sh cds to REPO_ROOT by design, so sourcing it MOVES us out
+        # of the fixture. Every relative path after that would land in the real
+        # repository -- which is how the suite came to arm a phantom run in the
+        # project it was testing, and why rt_work_seconds read files that were not
+        # the fixture's. Come back before running the snippet.
+        pre += 'cd "%s" || exit 97; ' % self.tmp
         e = dict(self.env)
         e.update(env or {})
         r = subprocess.run(

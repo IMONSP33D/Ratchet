@@ -1,4 +1,4 @@
-# Ratchet 1.0.0 — build notes
+# Ratchet 1.1.0 — build notes
 
 What this is, what was verified, and what was not. Read the honest-limitations section
 before you trust anything here in anger.
@@ -34,6 +34,7 @@ Found by the self-test, i.e. the suite earned its keep before shipping:
 | `*` crossed `/` in partition globs (`src/*.py` admitted `src/deep/a.py`) | MEDIUM — a partition is silently wider than the architect declared | segment-aware matcher; `**` crosses, `*` does not |
 | a missing escalation key was never surfaced | MEDIUM — every "ESCALATABLE" refusal is a dead end and you find out mid-run | session-start now probes the approval channel and says so in plain words |
 | scope-guard bound approvals to the path, not the resulting bytes | MEDIUM — no approval could ever match | passes the target sha through |
+| **the new host check itself rejected working hosts**: `"$PY"` was quoted, so a multi-word interpreter (`py -3`) exec'd a file literally named "py -3", produced nothing, and read as "bash is broken"; it also probed only one bash candidate and never offered Python the shell the installer was already running under | **HIGH — refused to install on a healthy WSL box** | `$PY` unquoted (as every other call site already had it); multi-candidate probe that hands Python the installer's own bash first; explicit WSL-shell + Windows-Python mismatch message |
 | **the suite spawned bare `bash`, which on Windows resolves to the System32 WSL relay** | **HIGH — a real install reported 130 failures, every gate fine, none reachable** | probe that proves bash runs a command before using it (the `rt_pick_py` treatment); installers now pin `RATCHET_BASH`; host check fails before install; regression test added |
 | escalation refusal records accumulated forever (never swept by `archive` or `prune`) | LOW — ~30k tiny files after 500 runs; violates the harness's own `artifacts-outlive-their-run` lesson | `archive` now rotates them into the run's archive dir as evidence; the single-use ledger stays live |
 | deleting a temp file outside the repo was refused | LOW — a control layer you cannot use is one agents route around | recognised temp roots exempt; arbitrary absolute paths still refused |
@@ -106,9 +107,58 @@ choice in the suite's first line (`ratchet self-test: bash=... python=...`). Bot
 pin `RATCHET_BASH` to the interpreter they verified, and `install.sh` refuses to install if Python
 cannot spawn a working bash at all. To override by hand:
 
-    set RATCHET_BASH=C:\Program Files\Git\bin\bash.exe
+    set RATCHET_BASH=C:\Program Files\Git\bin\bash.exe          (Windows)
+    RATCHET_BASH=/usr/bin/bash ./install.sh ...              (WSL / Linux / macOS)
+
+**Running under WSL?** Stay entirely inside it: clone into `~/`, not `/mnt/c/`, and use the
+distro's own `python3` and `git`. A WSL shell driving a *Windows* Python is the one configuration
+that cannot work — the two do not share a filesystem, so no single bash path satisfies both and
+every error message names a file that really exists on the other side. `install.sh` now detects
+that pairing and refuses with an explanation rather than a generic bash complaint.
 
 **A red verification no longer records a postcondition baseline.** Baselining from a red run
 would record that day's breakage as the host's normal state, after which the postcondition check
 passes while the control layer is broken — a check that looks green being strictly worse than no
 check at all.
+
+
+---
+
+# 1.1.0 — what changed
+
+**New: `ratchet-dependencies.sh` / `.ps1`.** Detects and installs what the host check requires
+(bash 4+, git, jq, a working python3, gh) across apt / dnf / yum / pacman / apk / brew / winget /
+choco, plus optional stack tools. `--check` reports and changes nothing; `--dry-run` prints the
+plan; nothing is sudo'd without showing the command first. It refuses to curl-pipe an installer,
+refuses to pip into a PEP-668 interpreter, and detects the Windows Store python stub by path.
+
+**New: `ratchet-update.sh` / `.ps1` + `.context/UPGRADING.md`.** Mid-project scaffold upgrades.
+Every path is classified HARNESS (replaced), USER (never touched), or MERGED (settings.json only) —
+and the classifier's default is USER, so an unrecognised path is never touched. It detects harness
+files you edited locally against a checksum baseline, preserves them as `.local-<timestamp>`,
+backs up `.claude/` with a one-command rollback, refuses to run mid-run (the second half of a run
+would be judged by different rules than the first), and runs the suite afterwards without
+auto-rolling-back a failure. `UPGRADING.md` covers the agent-driven path: the control layer is
+Tier 2b, so a project's own pipeline changes go through the supervisor-changeset pattern and are
+proposed upstream, not patched locally.
+
+**Redesigned installer UI.** Phased progress (`[3/7]`), aligned status columns, box-drawn summary,
+spinners on the two slow steps. Degrades to ASCII on legacy code pages, drops colour under
+`NO_COLOR` / non-TTY / `TERM=dumb`, clamps to terminal width, and emits zero escape bytes when
+redirected. New flags: `--quiet`, `--no-color`, `--ascii`.
+
+**`.context/` is now bare bones (2604 → 2107 lines).** `SPEC.md` and `MILESTONES.md` ship as
+~15-line placeholders carrying `<!-- ratchet:unwritten -->`; `CONVENTIONS.md` is gone. In their
+place is **`.context/TEMPLATE.md`** (395 lines): the one structural guide an agent reads to write
+the project's real contracts — taxonomy, AV register, WIN-row spec, naming doctrine, every frozen
+format, and one minimal two-row example. `check_done.py` detects the unwritten marker and fails
+with an actionable message instead of passing vacuously on a file with no WIN rows.
+
+## Defects found and fixed in 1.1.0
+
+| defect | severity | fix |
+|---|---|---|
+| **the suite armed a phantom run in the repo under test**: `sh()` set `cwd` to the fixture, but sourcing `ratchet.config.sh` cds to REPO_ROOT by design, so every relative path afterwards escaped into the real project — writing `.pipeline/run-active` there | **HIGH — a phantom active run changes how every gate behaves, and it blocked the updater** | the helper returns to the fixture after sourcing; also resolves the long-standing `rt_work_seconds` skip, which was the same escape |
+| `install.sh` never wrote `.ratchet-version` / `.ratchet-manifest` | MEDIUM — the first update could not tell your edits from upstream changes, so everything read as UNVERIFIED | install records both at the end of a successful install |
+| host-check failure told you to "fix the FAIL lines" with no tool to do it | LOW | points at `ratchet-dependencies.sh --check` |
+| first-run instructions told the agent to read SPEC/MILESTONES, which are now placeholders | LOW | tells it to read `TEMPLATE.md`, interview you, and invent nothing |

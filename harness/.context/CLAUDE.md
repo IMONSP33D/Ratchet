@@ -16,17 +16,17 @@ Read order (imports):
 - Engineering law & contracts: @SPEC.md — requirement IDs (REQ/SEC/TEST/INV/AV) are the frozen contract source
 - Build order & win conditions: @MILESTONES.md — **the sole source of milestone numbering**
 - Stage mechanics, roles, hooks, preconditions: @PIPELINE.md
-- Structural conventions (ID taxonomy, verify commands, evidence layout, artifact formats): @CONVENTIONS.md
+- Structural conventions (ID taxonomy, verify commands, evidence layout, artifact formats): @TEMPLATE.md
 - Decision log (append-only hot file): @DECISIONS.md
 - Live pipeline context: @../.pipeline/context-live.md (injected at SessionStart)
 - **Accumulated process lessons: @../.agent-development/ACTIVE-LESSONS.md — read at run start, every run**
 
-RFC 2119 keywords apply. `CLAUDE.md`, `SPEC.md`, `MILESTONES.md`, `PIPELINE.md` and `CONVENTIONS.md`
+RFC 2119 keywords apply. `CLAUDE.md`, `SPEC.md`, `MILESTONES.md`, `PIPELINE.md` and `TEMPLATE.md`
 are the governing corpus: human-owned, never agent-edited. Instructions are context; enforcement lives
 in tests, `{{VERIFY_CMD}}`, permissions, and the hooks.
 
 **Precedence.** On any apparent conflict: Tier 2b > Hard rules > Hard Stops > laws 1–7 > PIPELINE.md
-mechanics > CONVENTIONS.md. The stricter reading wins, and you log the conflict in `DECISIONS.md`.
+mechanics > TEMPLATE.md. The stricter reading wins, and you log the conflict in `DECISIONS.md`.
 
 ---
 
@@ -290,7 +290,7 @@ No restart. No widened standing rule. No weakened check.
 ### Never-escalatable — the class that stays a wall
 
 Secrets, keys and `.env` · force push · pushing or committing `{{BASE_BRANCH}}` outside the ship flow ·
-the governing corpus (`SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `CONVENTIONS.md`, this file) · the
+the governing corpus (`SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, this file) · the
 control set (`settings.json`, `guard.sh`, `scope-guard.sh`, `hooklib.sh`, `escalation-lib.sh`,
 `approve.sh`, `ratchet.config.sh`) · and everything the domain pack lists in
 `DOMAIN_NEVER_ESCALATABLE`.
@@ -452,7 +452,7 @@ Every task message carries exactly:
 
 **Not** in the packet: laws 1–7 (they are in every agent definition), the master contract in full
 (agents read their slice), `context-live.md` (SessionStart injects it), this file, `PIPELINE.md`, or
-`CONVENTIONS.md`.
+`TEMPLATE.md`.
 
 ### On item 4 — the partition glob is a mechanical write allow-list, not advice
 
@@ -687,7 +687,7 @@ fix, not a looser one.
 ### The ledger
 
 **Every finding is recorded in `.pipeline/findings.md` before adjudication**, in the frozen pipe-table
-format (see CONVENTIONS.md):
+format (see TEMPLATE.md §9):
 
 ```
 | name | source | severity as filed | file:line | finding | disposition | rationale | DEC |
@@ -729,7 +729,7 @@ zero unresolved CRITICALs, HIGH acceptances documented, ledger complete, final c
 - **Tier 2b (NEVER, nothing can authorize — not even an approval):** merging or pushing
   `{{BASE_BRANCH}}` **without** a Ship Prompt answer; committing directly on `{{BASE_BRANCH}}` (work
   reaches it through the PR, never around it); force pushes; reading or writing secrets, `.env` or
-  keys; the governing corpus (`SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `CONVENTIONS.md`, this
+  keys; the governing corpus (`SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, this
   file); the control layer's own files (`settings.json`, `guard.sh`, `scope-guard.sh`, `hooklib.sh`,
   `escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`); and everything the domain pack declares in
   `FORBIDDEN_EXEC_TOKENS`, `FORBIDDEN_ARTIFACTS` and `DOMAIN_NEVER_ESCALATABLE`.
@@ -879,7 +879,7 @@ Gate M<n> closes on merge; the merge commit is the gate marker. Then `gc-prune.s
 - Never commit directly on `{{BASE_BRANCH}}`; work reaches it through the PR, never around it.
 - **Never put a decision in chat as lettered options.** Every card is an `AskUserQuestion` call the
   human answers with the arrow keys. If you find yourself writing "reply A or B", stop and use the tool.
-- Never modify `.env*`, this file, `SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `CONVENTIONS.md`, or the
+- Never modify `.env*`, this file, `SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, or the
   control layer's own files. The rest of `.claude/**` is refused by default and changeable only
   through an approved, byte-exact write — never silently.
 - **Never run `approve.sh`, and never route around a refusal that says it is not escalatable.** You

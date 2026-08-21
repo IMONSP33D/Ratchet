@@ -60,7 +60,7 @@ BANNED_READ_FILES="${BANNED_READ_FILES:-}"
 # decision log unwritable and strand every ambiguity the agent is required to log.
 GOVERNING_CORPUS="${GOVERNING_CORPUS:-.context/CLAUDE.md
 .context/PIPELINE.md
-.context/CONVENTIONS.md
+.context/TEMPLATE.md
 .context/SPEC.md
 .context/MILESTONES.md}"
 
@@ -138,7 +138,7 @@ ARBITER_LABEL="${ARBITER_LABEL:-Escalate to a higher-tier model}"
 #
 # GOVERNING_CORPUS=".context/CLAUDE.md
 # .context/PIPELINE.md
-# .context/CONVENTIONS.md
+# .context/TEMPLATE.md
 # .context/SPEC.md
 # .context/MILESTONES.md"
 #

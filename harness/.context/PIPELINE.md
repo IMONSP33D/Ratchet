@@ -139,7 +139,7 @@ Before each dispatch:
 
 Receives: `.pipeline/contracts-<P>.md`, the WIN rows the partition serves, the ledger rows it must
 cover, and the dispatch id. Produces: failing tests — every golden value, every property, every ledger
-entry becomes a **named test carrying its requirement id** (see `CONVENTIONS.md`) or a documented
+entry becomes a **named test carrying its requirement id** (see `TEMPLATE.md` §8) or a documented
 deferral. Tests only; never touches implementation.
 
 **`red-gate.sh` fires on this seat's `SubagentStop`.** It runs the stack's red-test command over the

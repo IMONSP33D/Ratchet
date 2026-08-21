@@ -16,6 +16,40 @@ When it can't proceed, it **stops loudly** rather than proceeding on a guess.
 
 ---
 
+
+## Install, in order
+
+```bash
+./ratchet-dependencies.sh --check     # what's missing? changes nothing
+./ratchet-dependencies.sh             # install it (asks before any sudo)
+./install.sh --target . --stack python-pytest --project-name my-app
+```
+
+Windows/PowerShell: `.\ratchet-dependencies.ps1 -Check` then `.\install.ps1 -Target .`
+
+**WSL note.** WSL is fully supported — it is Linux. The one thing that cannot work is a WSL
+shell driving a *Windows* Python, because they do not share a filesystem. Keep the project and
+the toolchain in one world: either clone into `~/` and use the distro's `python3`/`git`, or keep
+the project on `C:\` and use PowerShell or Git-Bash.
+
+## Upgrading mid-project
+
+```bash
+./ratchet-update.sh --check           # what would change? touches nothing
+./ratchet-update.sh --apply
+```
+
+Your domain pack, contracts, findings, retros and secrets are never touched; harness files you
+edited locally are preserved as `.local-<timestamp>` rather than clobbered; `.claude/` is backed
+up with a one-line rollback. See `.context/UPGRADING.md`, especially for the agent-driven path —
+the control layer is Tier 2b, so pipeline changes go through the supervisor-changeset pattern.
+
+## Writing your project's contracts
+
+`.context/SPEC.md` and `.context/MILESTONES.md` ship as placeholders on purpose. The harness does
+not guess your project. Point Claude at `.context/TEMPLATE.md` — it interviews you and writes them.
+Correct what it drafts; you own those two files.
+
 ## Who this is for
 
 You want to give an agent a real unit of work — a milestone, not a task — and
@@ -40,7 +74,7 @@ downstream check then agrees with it.
 | Directory | Owner | The agent may | Why |
 |---|---|---|---|
 | `.claude/` | **The control layer** | read, never write | The guards, the gates, the agent definitions and the permission surface. If the agent can edit the thing that refuses it, the refusal is decorative. |
-| `.context/` | **You, the human** | read, never write | `SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `CONVENTIONS.md`, `CLAUDE.md`. The contracts. An agent that can move the finish line has not reached it. (`DECISIONS.md` is the one exception — appending a decision must never be the failing action.) |
+| `.context/` | **You, the human** | read, never write | `SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, `CLAUDE.md`. The contracts. An agent that can move the finish line has not reached it. (`DECISIONS.md` is the one exception — appending a decision must never be the failing action.) |
 | `.pipeline/` | **The agent, per run** | read and write freely | Scratch, findings, checkpoints, manifests, the consent record. Cleared and archived at gate closure. This is where the agent thinks. |
 | `.agent-development/` | **The learning loop** | append | Run retrospectives, consolidated lessons, pending human actions. Tracked forever, never pruned. This is the only thing that makes run N+1 better than run N. |
 

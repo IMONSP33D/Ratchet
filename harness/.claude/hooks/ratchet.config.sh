@@ -20,7 +20,7 @@ if [ -n "${RATCHET_CONFIG_LOADED:-}" ]; then
 fi
 RATCHET_CONFIG_LOADED=1
 
-RT_VERSION="${RT_VERSION:-1.0.0}"
+RT_VERSION="${RT_VERSION:-1.1.0}"
 
 # --- REPO_ROOT resolution -------------------------------------------------------------------
 # Order is fixed by CONTRACT SS4.1: CLAUDE_PROJECT_DIR, then a walk-up from this file, then git.

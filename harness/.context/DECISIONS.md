@@ -38,7 +38,7 @@ recorded as a decision is both a bloated log and a task nobody tracks.
 
 Every decision carries **both**: `DEC-nnn · <name>`. The number is the sort key and the archive
 filename; the name is what humans read and cite. Names are kebab-case, 2–5 words, state the problem,
-and are unique across findings, lessons, pending actions and decisions (`CONVENTIONS.md` §A11).
+and are unique across findings, lessons, pending actions and decisions (`TEMPLATE.md` §7).
 
 **Ids are permanent and never reused.** A decision that replaces an older one gets a NEW id and name
 plus a `Supersedes.` line; the old id keeps resolving forever, because a citation that resolves to

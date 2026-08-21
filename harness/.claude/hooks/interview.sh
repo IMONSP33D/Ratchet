@@ -81,7 +81,7 @@ fi
 # Harness-wide defaults for the "you almost certainly want these" answers.
 : "${GOVERNING_CORPUS:=.context/CLAUDE.md
 .context/PIPELINE.md
-.context/CONVENTIONS.md
+.context/TEMPLATE.md
 .context/SPEC.md
 .context/MILESTONES.md
 CLAUDE.md}"
