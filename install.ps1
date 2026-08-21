@@ -235,6 +235,11 @@ if ($script:BashPath -and $script:BashKind -like 'WSL*') {
     Write-Cont '    winget install Git.Git'
 }
 
+# The suite is driven by PYTHON, which resolves bash independently and, on
+# Windows, usually lands on the System32 WSL relay rather than the Git-Bash we
+# just proved works. Hand our answer down so both halves agree.
+if ($script:BashPath) { $env:RATCHET_BASH = $script:BashPath }
+
 if (-not $script:BashPath) {
     Write-Fail 'No usable bash found. Every Ratchet hook is a bash script.'
     Write-Cont 'Without one, the harness installs and then every single gate errors'
@@ -1427,8 +1432,19 @@ if (-not $SkipVerify -and -not $WhatIfPreference) {
     # pre-existing failures and no baseline, every failure counts as new and the
     # postcondition can never clear -- turning an approvable write into a
     # permanent wall for reasons unrelated to the write. Record the floor now.
+    # BUT: a baseline records "what this host already fails". Taken from a RED
+    # run it bakes today's breakage in as normal, and the postcondition then
+    # passes while the control layer is genuinely broken -- a check that looks
+    # green is worse than no check. Only baseline from a run that passed.
     $approve = Join-Path $TargetPath '.claude\hooks\approve.sh'
-    if ((Test-Path -LiteralPath $approve) -and $script:BashPath) {
+    if ($verifyState -eq 'FAIL') {
+        Write-Warn 'NOT recording a postcondition baseline: verification failed.'
+        Write-Cont "A baseline taken from a red suite records today's failures as this host's"
+        Write-Cont 'normal state, and the postcondition would then pass while the control'
+        Write-Cont 'layer is broken. Fix the suite, then run:'
+        Write-Cont '    bash .claude/hooks/approve.sh --postcondition-baseline'
+    }
+    elseif ((Test-Path -LiteralPath $approve) -and $script:BashPath) {
         Push-Location $TargetPath
         & $script:BashPath -c './.claude/hooks/approve.sh --postcondition-baseline' *> $null
         $rc = $LASTEXITCODE

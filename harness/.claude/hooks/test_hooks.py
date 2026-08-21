@@ -69,6 +69,7 @@ import re
 import shutil
 import stat
 import subprocess
+import pathlib
 import tempfile
 import time
 import unittest
@@ -148,6 +149,101 @@ OUTCOMES = {"shipped", "nogo", "halted", "abandoned", "superseded", "awaiting-sh
 # --------------------------------------------------------------------------
 # smoke tagging
 # --------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# BASH RESOLUTION - the Windows trap this suite exists to survive.
+#
+# On Windows, C:\Windows\System32\bash.exe is the WSL *relay*, and it usually
+# precedes Git-Bash on PATH. If WSL has no working distro it fails with
+#   WSL ... ERROR: CreateProcessCommon:800: execvpe(/bin/bash) failed
+# and every hook launch dies BEFORE the hook runs -- so every gate looks broken
+# and the suite reports ~130 failures that have nothing to do with the gates.
+#
+# This is the same defect class as the Windows Store python stub that rt_pick_py
+# exists to skip, so it gets the same treatment: do not trust a name on PATH,
+# PROVE the interpreter works, and say which one was chosen.
+# Override with RATCHET_BASH=/path/to/bash.
+# ---------------------------------------------------------------------------
+def _resolve_bash():
+    import shutil as _sh
+
+    def works(cand):
+        if not cand:
+            return False
+        try:
+            r = subprocess.run([cand, "-c", "printf ratchet-ok"],
+                               capture_output=True, text=True, timeout=20)
+        except Exception:
+            return False
+        return r.returncode == 0 and "ratchet-ok" in (r.stdout or "")
+
+    def is_relay(pth):
+        low = (pth or "").lower()
+        return "system32" in low or "sysnative" in low
+
+    cands, seen = [], set()
+
+    def add(c):
+        if c and c not in seen:
+            seen.add(c)
+            cands.append(c)
+
+    forced = os.environ.get("RATCHET_BASH")
+    if forced:
+        if works(forced):
+            return forced
+        sys.stderr.write(
+            "ratchet: RATCHET_BASH=%r does not run a command; probing instead\n" % forced)
+
+    if os.name == "nt":
+        for root in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                     os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                     os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+            if root:
+                for sub in (r"Git\bin\bash.exe", r"Git\usr\bin\bash.exe"):
+                    add(os.path.join(root, sub))
+        names = ("bash.exe", "bash")
+    else:
+        for c in ("/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash", "/opt/homebrew/bin/bash"):
+            add(c)
+        names = ("bash",)
+
+    # Every bash on PATH, not merely the first - the first is exactly the one
+    # that is broken on the hosts this probe exists for.
+    relays = []
+    for d in (os.environ.get("PATH", "") or "").split(os.pathsep):
+        if not d:
+            continue
+        for n in names:
+            c = os.path.join(d, n)
+            if os.path.isfile(c):
+                (relays if is_relay(c) else cands.append) and None
+                if is_relay(c):
+                    relays.append(c)
+                else:
+                    add(c)
+    for r in relays:      # the WSL relay is a last resort, never a preference
+        add(r)
+
+    for c in cands:
+        if os.path.sep in c and not os.path.isfile(c):
+            continue
+        if works(c):
+            return c
+
+    sys.stderr.write(
+        "\nratchet: NO WORKING BASH FOUND. Every candidate failed to run a command:\n"
+        + "".join("    %s\n" % c for c in cands[:8])
+        + "The hooks are bash scripts, so the suite cannot drive them and every test\n"
+        "will fail for that reason and not because a gate is broken. On Windows this\n"
+        "is usually WSL's C:\\Windows\\System32\\bash.exe shadowing Git-Bash with no\n"
+        "distro installed. Fix: install Git for Windows, or set\n"
+        "    set RATCHET_BASH=C:\\Program Files\\Git\\bin\\bash.exe\n\n")
+    return cands[0] if cands else "bash"
+
+
+BASH = _resolve_bash()
+
 def smoke(fn):
     """Mark a test as part of the fast availability probe (--smoke)."""
     fn.__smoke__ = True
@@ -287,7 +383,7 @@ class RepoCase(unittest.TestCase):
         e.update(env or {})
         e["CLAUDE_PROJECT_DIR"] = str(self.tmp)
         return subprocess.run(
-            ["bash", str(script)],
+            [BASH, str(script)],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
@@ -305,7 +401,7 @@ class RepoCase(unittest.TestCase):
         e = dict(self.env)
         e.update(env or {})
         r = subprocess.run(
-            ["bash", "-c", pre + script],
+            [BASH, "-c", pre + script],
             capture_output=True,
             text=True,
             cwd=str(cwd or self.tmp),
@@ -366,7 +462,7 @@ class RepoCase(unittest.TestCase):
         p = self.hooks_dir() / "gc-prune.sh"
         if p.is_file():
             r = subprocess.run(
-                ["bash", str(p), "start", milestone],
+                [BASH, str(p), "start", milestone],
                 capture_output=True,
                 text=True,
                 cwd=str(self.tmp),
@@ -456,7 +552,7 @@ class TestEveryGuardRuleIdIsClassified(RepoCase):
             if not p.is_file():
                 continue
             r = subprocess.run(
-                ["bash", str(p), "--list-rules"],
+                [BASH, str(p), "--list-rules"],
                 capture_output=True,
                 text=True,
                 cwd=str(self.tmp),
@@ -1620,7 +1716,7 @@ class TestScopeGuardFailsClosed(RepoCase):
         self.start_run()
         script = self.hooks_dir() / "scope-guard.sh"
         r = subprocess.run(
-            ["bash", str(script)],
+            [BASH, str(script)],
             input="not json at all",
             capture_output=True,
             text=True,
@@ -2109,7 +2205,7 @@ class TestAttributionOnlyBlamesTheActor(GateCase):
         self.start_run()
         self.dirty("src/pre-existing.py")  # dirty BEFORE the dispatch
         r = subprocess.run(
-            ["bash", str(self.hooks_dir() / "dispatch-baseline.sh"), "d-exact"],
+            [BASH, str(self.hooks_dir() / "dispatch-baseline.sh"), "d-exact"],
             capture_output=True,
             text=True,
             cwd=str(self.tmp),
@@ -2122,7 +2218,7 @@ class TestAttributionOnlyBlamesTheActor(GateCase):
         # `changed` is the documented reader for the snapshot and refreshes the
         # derived baseline that rt_attributable reads in exact mode.
         subprocess.run(
-            ["bash", str(self.hooks_dir() / "dispatch-baseline.sh"), "changed", "d-exact"],
+            [BASH, str(self.hooks_dir() / "dispatch-baseline.sh"), "changed", "d-exact"],
             capture_output=True, text=True, cwd=str(self.tmp), env=self.env, timeout=60,
         )
         mine = self.attributable("src/mine.py", dispatch="d-exact")
@@ -2299,7 +2395,7 @@ class TestEscalationIsRefusedByDefault(EscalationCase):
         self.assertEqual(r.returncode, BLOCK)
         self.assertIsNone(esc_id, "a never-escalatable refusal must not offer an id")
         out = subprocess.run(
-            ["bash", str(self.hooks_dir() / "escalate.sh"), "request", "force-push", "because"],
+            [BASH, str(self.hooks_dir() / "escalate.sh"), "request", "force-push", "because"],
             capture_output=True,
             text=True,
             cwd=str(self.tmp),
@@ -2328,7 +2424,7 @@ class TestEscalationIsRefusedByDefault(EscalationCase):
     def test_approve_sh_refuses_without_a_terminal(self):
         need("approve.sh")
         r = subprocess.run(
-            ["bash", str(self.hooks_dir() / "approve.sh"), "abc123"],
+            [BASH, str(self.hooks_dir() / "approve.sh"), "abc123"],
             input="",
             capture_output=True,
             text=True,
@@ -2521,7 +2617,7 @@ class TestControlLayerIsAvailable(GateCase):
         for p in scripts:
             for payload in ("", "{}", "not json", '{"tool_input":null}'):
                 r = subprocess.run(
-                    ["bash", str(p)],
+                    [BASH, str(p)],
                     input=payload,
                     capture_output=True,
                     text=True,
@@ -2807,7 +2903,7 @@ class TestDisclosedRedHasAHome(GateCase):
     def test_a_disclosed_red_renders_DISCLOSED_and_not_PASS(self):
         need("check_done.py", "approve.sh", "escalation-lib.sh")
         r = subprocess.run(
-            ["bash", str(self.hooks_dir() / "approve.sh"), "--disclose", "12-narrative"],
+            [BASH, str(self.hooks_dir() / "approve.sh"), "--disclose", "12-narrative"],
             input="",
             capture_output=True,
             text=True,
@@ -2899,7 +2995,7 @@ class TestCitedEvidencePathIsRetained(GateCase):
         runs.mkdir(parents=True, exist_ok=True)
         write(runs / "001-M1-shipped.md", "# retro\n")
         r = subprocess.run(
-            ["bash", str(self.hooks_dir() / "gc-prune.sh"), "archive", "M1"],
+            [BASH, str(self.hooks_dir() / "gc-prune.sh"), "archive", "M1"],
             capture_output=True,
             text=True,
             cwd=str(self.tmp),
@@ -2930,7 +3026,7 @@ class TestCitedEvidencePathIsRetained(GateCase):
         need("gc-prune.sh")
         self.start_run()
         subprocess.run(
-            ["bash", str(self.hooks_dir() / "gc-prune.sh"), "prune"],
+            [BASH, str(self.hooks_dir() / "gc-prune.sh"), "prune"],
             capture_output=True,
             text=True,
             cwd=str(self.tmp),
@@ -3058,7 +3154,7 @@ class TestClearVerdictIsSelfWritten(GateCase):
         need("checkpoint-evidence.sh")
         write(self.tmp / "src/app.py", "VALUE = 2\n")
         r = subprocess.run(
-            ["bash", str(self.hooks_dir() / "checkpoint-evidence.sh"), "1", "contracts"],
+            [BASH, str(self.hooks_dir() / "checkpoint-evidence.sh"), "1", "contracts"],
             capture_output=True,
             text=True,
             cwd=str(self.tmp),
@@ -3432,7 +3528,7 @@ class TestCwdIndependence(GateCase):
         need("pipeline-event.sh")
         sub = self.subdir()
         subprocess.run(
-            ["bash", str(self.hooks_dir() / "pipeline-event.sh"), "test_event", "k=v"],
+            [BASH, str(self.hooks_dir() / "pipeline-event.sh"), "test_event", "k=v"],
             capture_output=True,
             text=True,
             cwd=str(sub),
@@ -3974,7 +4070,67 @@ class _Result(unittest.TextTestResult):
         self._rec(test, "fail", "unexpected success")
 
 
+
+
+class TestBashIsResolvedByProbe(unittest.TestCase):
+    """availability-before-security, applied to bash instead of python.
+
+    A real install reported 130 failures whose single cause was that Python
+    resolved `bash` to the Windows System32 WSL relay, which died with
+    execvpe(/bin/bash) before any hook ran. Every gate was fine; the suite could
+    not reach them. The probe must route around a bash that cannot run a
+    command, exactly as rt_pick_py routes around the Store python stub.
+    """
+
+    def _fake_broken_bash(self, d):
+        p = pathlib.Path(d) / "bash"
+        p.write_text(
+            "#!/bin/sh\n"
+            "echo '<3>WSL (1 - Relay) ERROR: CreateProcessCommon:800: "
+            "execvpe(/bin/bash) failed: No such file or directory' >&2\nexit 1\n",
+            encoding="utf-8")
+        p.chmod(0o755)
+        return p
+
+    def test_the_resolved_bash_actually_runs_a_command(self):
+        r = subprocess.run([BASH, "-c", "printf ratchet-ok"],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, "resolved bash %r cannot run a command" % BASH)
+        self.assertIn("ratchet-ok", r.stdout)
+
+    def test_negative_a_relay_style_bash_first_on_PATH_is_skipped(self):
+        """Drive the real script with a relay-style bash first on PATH and read
+        back which interpreter it chose, from its own banner."""
+        d = tempfile.mkdtemp(prefix="ratchet-badbash-")
+        try:
+            bad = self._fake_broken_bash(d)
+            env = dict(os.environ)
+            env["PATH"] = d + os.pathsep + env.get("PATH", "")
+            env.pop("RATCHET_BASH", None)
+            me = str(pathlib.Path(__file__).resolve())
+            r = subprocess.run([sys.executable, me, "--list"],
+                               capture_output=True, text=True, env=env, timeout=120)
+            m = re.search(r"ratchet self-test: bash=(\S+)", r.stderr or "")
+            self.assertIsNotNone(
+                m, "the suite did not report which bash it chose; that banner is how a "
+                   "human diagnoses this failure at all. stderr=%r" % (r.stderr or "")[:400])
+            chosen = m.group(1)
+            self.assertNotEqual(
+                os.path.realpath(chosen), os.path.realpath(str(bad)),
+                "the probe chose a bash that cannot run a command. On Windows that is the "
+                "System32 WSL relay, and it makes all 175 gates look broken when every one "
+                "of them is fine.")
+            v = subprocess.run([chosen, "-c", "printf ratchet-ok"],
+                               capture_output=True, text=True, timeout=30)
+            self.assertIn("ratchet-ok", v.stdout, "chosen bash %r does not work" % chosen)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def main(argv=None):
+
+    if os.environ.get("RATCHET_QUIET") != "1":
+        sys.stderr.write("ratchet self-test: bash=%s  python=%s\n" % (BASH, sys.executable))
     argv = list(sys.argv[1:] if argv is None else argv)
     want_json = "--json" in argv
     want_list = "--list" in argv

@@ -210,6 +210,50 @@ else
   HOST_FATAL=1
 fi
 
+# --- can PYTHON spawn a working bash? (the WSL relay trap) -----------------
+# This script is bash, so bash obviously works HERE. That proves nothing about
+# what the Python-side suite gets: test_hooks.py drives every hook by spawning
+# bash, and on Windows the PATH it sees usually starts with
+# C:\Windows\System32\bash.exe -- the WSL *relay*. With no working distro that
+# relay dies with "execvpe(/bin/bash) failed" BEFORE the hook runs, so every
+# gate looks broken and the suite reports a hundred-plus failures that have
+# nothing to do with the gates. Catch it here, where the message can still help.
+if [ -n "$PY" ]; then
+  PY_BASH="$("$PY" - <<'PYEOF' 2>/dev/null
+import os, subprocess, shutil, sys
+def works(c):
+    if not c: return False
+    try:
+        r = subprocess.run([c, "-c", "printf ok"], capture_output=True, text=True, timeout=20)
+    except Exception:
+        return False
+    return r.returncode == 0 and "ok" in (r.stdout or "")
+c = os.environ.get("RATCHET_BASH") or shutil.which("bash")
+print(c if works(c) else "")
+PYEOF
+)"
+  if [ -n "$PY_BASH" ]; then
+    ok "python can spawn bash ('$PY_BASH')"
+    # Pin it for the verification run and for every hook that shells out to the
+    # suite later, so the Python side and the shell side cannot disagree.
+    [ -n "${RATCHET_BASH:-}" ] || export RATCHET_BASH="$PY_BASH"
+  else
+    err "Python cannot spawn a working bash."
+    say "        Every hook is a bash script and the test suite drives them through"
+    say "        Python, so this breaks the whole control layer -- and it breaks it in"
+    say "        the most confusing possible way: the gates are fine, but every test"
+    say "        fails with an exec error and the suite looks catastrophically red."
+    say ""
+    say "        On Windows this is almost always C:\\Windows\\System32\\bash.exe (the"
+    say "        WSL relay) shadowing Git-Bash, with no WSL distro installed."
+    say "        Fix either way:"
+    say "            install Git for Windows (gives you a real bash), or"
+    say "            set RATCHET_BASH=\"C:\\Program Files\\Git\\bin\\bash.exe\""
+    say "        Then re-run this installer."
+    HOST_FATAL=1
+  fi
+fi
+
 # --- gh (WARN: needed only for the ship flow) ------------------------------
 if command -v gh >/dev/null 2>&1; then
   if gh auth status >/dev/null 2>&1; then
@@ -1359,7 +1403,18 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
   # as new and the postcondition can never clear -- which turns an approvable
   # write into a permanent wall for reasons that have nothing to do with the
   # write. Recording the floor NOW, at install time, is the cheapest moment.
-  if [ -x "$TARGET/.claude/hooks/approve.sh" ]; then
+  # BUT: a baseline is a record of "what this host already fails". Recording one
+  # from a RED verification run bakes today's breakage in as normal, and the
+  # postcondition then passes while the control layer is genuinely broken -- the
+  # check would be worse than useless, because it would look green. So the floor
+  # is only recorded from a run that actually passed.
+  if [ "${VERIFY_STATE%% *}" = "FAIL" ]; then
+    warn "NOT recording a postcondition baseline: verification failed."
+    say "        A baseline taken from a red suite records today's failures as this"
+    say "        host's normal state, and the postcondition would then pass while the"
+    say "        control layer is broken. Fix the suite, then run:"
+    say "            .claude/hooks/approve.sh --postcondition-baseline"
+  elif [ -x "$TARGET/.claude/hooks/approve.sh" ]; then
     # This re-runs the hook suite to record the floor, so it gets the same bound.
     PCB_TO=""
     command -v timeout >/dev/null 2>&1 && PCB_TO="timeout ${RATCHET_INSTALL_VERIFY_TIMEOUT:-900}"

@@ -34,6 +34,8 @@ Found by the self-test, i.e. the suite earned its keep before shipping:
 | `*` crossed `/` in partition globs (`src/*.py` admitted `src/deep/a.py`) | MEDIUM — a partition is silently wider than the architect declared | segment-aware matcher; `**` crosses, `*` does not |
 | a missing escalation key was never surfaced | MEDIUM — every "ESCALATABLE" refusal is a dead end and you find out mid-run | session-start now probes the approval channel and says so in plain words |
 | scope-guard bound approvals to the path, not the resulting bytes | MEDIUM — no approval could ever match | passes the target sha through |
+| **the suite spawned bare `bash`, which on Windows resolves to the System32 WSL relay** | **HIGH — a real install reported 130 failures, every gate fine, none reachable** | probe that proves bash runs a command before using it (the `rt_pick_py` treatment); installers now pin `RATCHET_BASH`; host check fails before install; regression test added |
+| escalation refusal records accumulated forever (never swept by `archive` or `prune`) | LOW — ~30k tiny files after 500 runs; violates the harness's own `artifacts-outlive-their-run` lesson | `archive` now rotates them into the run's archive dir as evidence; the single-use ledger stays live |
 | deleting a temp file outside the repo was refused | LOW — a control layer you cannot use is one agents route around | recognised temp roots exempt; arbitrary absolute paths still refused |
 | law block was not delimited in the 12 seats | LOW — the anti-drift comparator could not run | `<!-- LAWBLOCK:BEGIN/END -->` in every seat |
 | two seeded lesson names failed the naming doctrine's own regex | LOW | renamed before first filing (a name is permanent after that) |
@@ -63,3 +65,50 @@ Do not point this at important work on day one. Install it, fill `SPEC.md` and
 `MILESTONES.md` with a deliberately small M0 (two WIN rows), and run that. You want to see
 the gates fire, a Decision Card arrive, and a checkpoint block — cheaply — before a real
 milestone depends on them.
+
+## Footprint (measured, not estimated)
+
+| | |
+|---|---|
+| self-test | 177 tests, 170 pass, 0 fail, 7 skip |
+| install size | ~1.2 MB, of which `test_hooks.py` is 172 KB (13%) |
+| `guard.sh` per Bash tool call | ~64 ms |
+| `scope-guard.sh` per Edit/Write | ~58 ms |
+| `session-start.sh` (once per session) | ~1.5 s, incl. a 0.6 s `--smoke` self-test |
+| full self-test (install verification only) | ~100 s |
+
+**Growth per run.** `.pipeline/` is run-scoped: `archive` rotates the events log, the manifest,
+the journal, the checkpoints and (as of this fix) the refusal records into
+`.pipeline/archive/<milestone>-<epoch>/`, so the live directory returns to roughly empty at every
+gate closure. Refusal records are ~67 bytes and dedupe by content-derived id, so an identical
+refusal repeated fifty times still costs one file.
+
+The one thing that grows on purpose is `.agent-development/` — one retro per run, tracked in git,
+never pruned. That is the point of it. `ACTIVE-LESSONS.md` is hard-capped at 100 lines precisely
+because it is the only part of the corpus that is read on every future run, so its length is a cost
+paid forever; the retros themselves are read only when someone goes looking.
+
+`du` overstates all of this: 53 escalation records show as 220 KB of 4 KB blocks and are 18.5 KB of
+actual content.
+
+## If the suite reports mass failures on Windows
+
+Look at one failure's `stderr` before anything else. If it says:
+
+    WSL ... ERROR: CreateProcessCommon:800: execvpe(/bin/bash) failed
+
+then no gate is broken. Python resolved `bash` to `C:\Windows\System32\bash.exe` — the
+WSL *relay* — which shadows Git-Bash on PATH and dies before the hook runs when no WSL distro
+is installed. Every test then fails for the same unrelated reason.
+
+Ratchet 1.0.0 probes for a bash that actually runs a command, prefers Git-Bash, and prints its
+choice in the suite's first line (`ratchet self-test: bash=... python=...`). Both installers now
+pin `RATCHET_BASH` to the interpreter they verified, and `install.sh` refuses to install if Python
+cannot spawn a working bash at all. To override by hand:
+
+    set RATCHET_BASH=C:\Program Files\Git\bin\bash.exe
+
+**A red verification no longer records a postcondition baseline.** Baselining from a red run
+would record that day's breakage as the host's normal state, after which the postcondition check
+passes while the control layer is broken — a check that looks green being strictly worse than no
+check at all.

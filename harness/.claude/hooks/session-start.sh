@@ -236,6 +236,9 @@ _smoke_probe() {
     return 1
   fi
   if command -v timeout >/dev/null 2>&1; then
+    # We ARE bash, so we know a working one; the Python suite would otherwise
+    # re-resolve it and can land on the WSL relay on Windows.
+    [ -n "${RATCHET_BASH:-}" ] || export RATCHET_BASH="${BASH:-$(command -v bash 2>/dev/null)}"
     out="$(timeout "$SMOKE_TIMEOUT" "$py" "$script" --smoke 2>&1)"; code=$?
   else
     out="$("$py" "$script" --smoke 2>&1)"; code=$?

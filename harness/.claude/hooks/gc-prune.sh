@@ -282,6 +282,32 @@ _archive() {
 
   local esc_msg; esc_msg="$(_expire_approvals)"
 
+  # Refusal records ROTATE into the archive alongside the events log. A refusal
+  # record IS evidence -- what was refused, and what bytes an approval would have
+  # been bound to -- so it is moved, never deleted. But it is evidence OF THIS
+  # RUN, and a live directory that only ever grows is the artifacts-outlive-their-run
+  # lesson wearing a different hat: at ~30 unique refusals a run it reaches tens of
+  # thousands of 67-byte files, which is inode and listing cost for nothing.
+  # The LEDGER stays live and is never rotated: it is the single-use replay
+  # defence, and it is append-only by design.
+  local edir eledger emoved
+  edir="$(_abs "${ESCALATIONS_DIR:-.pipeline/escalations}")"
+  eledger="$(_abs "${ESCALATION_LEDGER:-.pipeline/escalations/ledger.jsonl}")"
+  if [ -d "$edir" ]; then
+    emoved=0
+    mkdir -p "$dest/escalations" 2>/dev/null || true
+    for f in "$edir"/*; do
+      [ -e "$f" ] || continue
+      [ "$f" = "$eledger" ] && continue
+      case "$(basename "$f")" in
+        ledger.jsonl|postcondition-*) continue ;;
+      esac
+      mv -f "$f" "$dest/escalations/" 2>/dev/null && emoved=$((emoved+1))
+    done
+    [ "$emoved" -gt 0 ] && esc_msg="$esc_msg; $emoved record(s) rotated to archive"
+    rmdir "$dest/escalations" 2>/dev/null || true
+  fi
+
   {
     printf 'milestone: %s\n' "$ms"
     printf 'archived_at: %s\n' "$(_now_iso)"
@@ -338,7 +364,7 @@ _prune() {
     done
   fi
 
-  printf 'gc-prune: pruned %s scratch file(s) under %s. Run markers, findings, journal, checkpoints and escalations untouched.\n' "$n" "$p"
+  printf 'gc-prune: pruned %s scratch file(s) under %s. Run markers, findings, journal, checkpoints and the escalation ledger untouched (refusal records rotate at archive, not here).\n' "$n" "$p"
   _event run_prune "removed=$n"
   return 0
 }
