@@ -1518,6 +1518,44 @@ class TestScopeGuardTier2b(RepoCase):
             with self.subTest(path=rel):
                 self.assertTrue(self.scope_blocked(self.tmp / rel), rel)
 
+    def test_an_unwritten_contract_permits_exactly_one_bootstrap_write(self):
+        """TEMPLATE.md SS1 promises an agent may fill SPEC.md/MILESTONES.md once,
+        before the first run. The write was refused never-escalatably, so that
+        promised path did not exist. Now an UNWRITTEN placeholder (still carrying
+        the ratchet:unwritten marker) is writable; the instant the marker is gone
+        the file is corpus again. Nothing an agent controls re-opens it, because
+        putting the marker back is itself a corpus write this guard blocks.
+
+        The drafting pass is a PRE-RUN act (TEMPLATE.md SS1: 'once, before the
+        first run'), so no run is armed here -- and note the manifest wall still
+        stands during a run, so the exemption only ever opens the corpus wall."""
+        need("scope-guard.sh")
+        for rel in (".context/SPEC.md", ".context/MILESTONES.md"):
+            with self.subTest(path=rel):
+                write(self.tmp / rel, "# %s\n<!-- ratchet:unwritten -->\nNOT YET WRITTEN\n"
+                      % os.path.basename(rel))
+                self.assertFalse(
+                    self.scope_blocked(self.tmp / rel, content="# real contract\n"),
+                    "the sanctioned pre-run drafting pass was refused for an "
+                    "unwritten %s -- a fresh project cannot be started by an agent" % rel)
+                write(self.tmp / rel, "# real contract, owned by the human now\n")
+                self.assertTrue(
+                    self.scope_blocked(self.tmp / rel, content="# tampered\n"),
+                    "a WRITTEN %s was still writable -- the bootstrap exemption "
+                    "did not lock" % rel)
+
+    def test_a_doctrine_file_is_never_bootstrap_exempt(self):
+        """The exemption is scoped to the two human contracts by name. A doctrine
+        file that happened to contain the marker must still be refused."""
+        need("scope-guard.sh")
+        write(self.tmp / ".claude/doctrine/PIPELINE.md",
+              "# doctrine\n<!-- ratchet:unwritten -->\n")
+        self.assertTrue(
+            self.scope_blocked(self.tmp / ".claude/doctrine/PIPELINE.md",
+                               content="# rewritten\n"),
+            "a doctrine file carrying the marker was bootstrap-exempted; only "
+            ".context/SPEC.md and .context/MILESTONES.md may ever be")
+
     def test_secret_paths_are_refused_even_outside_the_repo(self):
         need("scope-guard.sh")
         self.start_run()

@@ -152,7 +152,36 @@ rt_repo_rel_var "$S_PATH"; S_REL="$RT_REL"
 # =================================================================================================
 # 1. Tier 2b - never escalatable, no exceptions, checked before anything else
 # =================================================================================================
+# The ONE sanctioned agent write to the human's contracts. TEMPLATE.md SS1 and the
+# SPEC.md/MILESTONES.md placeholders themselves name a single pre-run drafting
+# pass in which an agent fills these two files, then hands them over. That pass
+# was impossible: this guard refused the write never-escalatably, so the doctrine
+# described a path no code allowed and a fresh project could not be started by an
+# agent. The exemption is gated on the file's OWN on-disk state - an unwritten
+# placeholder still carrying `<!-- ratchet:unwritten -->` is not yet the
+# protected contract - NOT on an approval, env var, or domain pack, so it does
+# not become "Tier 2b unless someone clicks yes". It is one-way: the moment the
+# marker is gone the file is corpus forever, and re-inserting the marker is
+# itself a governing-corpus write this guard blocks. Nothing an agent controls
+# can re-open it. Scoped to exactly the two contract files by name; the doctrine
+# files (.claude/doctrine/*) never qualify.
+UNWRITTEN_MARKER='<!-- ratchet:unwritten -->'
+s_is_unwritten_bootstrap() {
+  local rel="$1" f
+  case "$rel" in
+    "${CONTEXT_DIR:-.context}/SPEC.md"|"${CONTEXT_DIR:-.context}/MILESTONES.md") ;;
+    *) return 1 ;;
+  esac
+  f="${REPO_ROOT:-.}/$rel"
+  [ -f "$f" ] || return 1
+  grep -qF -- "$UNWRITTEN_MARKER" "$f" 2>/dev/null || return 1
+  return 0
+}
+
 s_check_tier2b() {
+  S_BOOTSTRAP=0
+  s_is_unwritten_bootstrap "$S_REL" && S_BOOTSTRAP=1
+
   if rt_is_secret_path "$S_REL"; then
     s_refuse secrets-access \
       "This path is a secret: $S_REL" \
@@ -161,7 +190,7 @@ s_check_tier2b() {
       "open, once, rather than per write."
   fi
 
-  if rt_path_matches_list "$S_REL" "${GOVERNING_CORPUS:-}"; then
+  if [ "$S_BOOTSTRAP" != "1" ] && rt_path_matches_list "$S_REL" "${GOVERNING_CORPUS:-}"; then
     s_refuse governing-corpus-write \
       "This path is in the governing corpus: $S_REL" \
       "The governing corpus is Tier 2b: read it freely, never write it. Propose the change through" \
@@ -288,8 +317,11 @@ if [ "${1:-}" = "--selftest" ]; then
   printf 'scope-guard.sh selftest\n'
   _run ALLOW                  "ordinary source write"   Write "src/thing.py" "x = 1"
   _run ALLOW                  "scratch write"           Write ".pipeline/notes.md" "hi"
-  _run governing-corpus-write "corpus edit"             Edit  ".context/SPEC.md"
-  _run governing-corpus-write "corpus via ../"          Edit  ".pipeline/../.context/SPEC.md"
+  # Corpus cases use a doctrine file: it is always corpus and never eligible for
+  # the bootstrap exemption, so this assertion does not depend on whether the
+  # project's own .context/SPEC.md has been written yet.
+  _run governing-corpus-write "corpus edit"             Edit  ".claude/doctrine/PIPELINE.md"
+  _run governing-corpus-write "corpus via ../"          Edit  ".pipeline/../.claude/doctrine/PIPELINE.md"
   _run control-set-write      "control set write"       Write ".claude/hooks/guard.sh" "x"
   _run claude-dir-write       "agent definition write"  Write ".claude/agents/scout.md" "x"
   _run secrets-access         "dotenv write"            Write ".env" "TOKEN=1"
@@ -297,6 +329,19 @@ if [ "${1:-}" = "--selftest" ]; then
   _run secrets-access         "key write"               Write "secrets/escalation.key" "x"
   _run escalation-store-write "ledger write"            Write ".pipeline/escalations/ledger.jsonl" "{}"
   _run unparsable-payload     "no path in payload"      Write "" ""
+
+  # bootstrap exemption: the ONE sanctioned agent write to an UNWRITTEN contract,
+  # and the lock the instant the marker is gone. Driven against temp files made
+  # corpus and treated as the two contracts via CONTEXT_DIR/GOVERNING_CORPUS.
+  _bd=".pipeline/bootstrap-selftest"; mkdir -p "$_bd"
+  printf '%s\nNOT YET WRITTEN\n' "$UNWRITTEN_MARKER" > "$_bd/SPEC.md"
+  printf 'REAL SPEC, marker removed, owned by the human now\n' > "$_bd/MILESTONES.md"
+  ( export CONTEXT_DIR="$_bd" \
+           GOVERNING_CORPUS="$_bd/SPEC.md"$'\n'"$_bd/MILESTONES.md"
+    _run ALLOW                  "unwritten contract (bootstrap)" Write "$_bd/SPEC.md" "real content"
+    _run governing-corpus-write "written contract (locked)"     Write "$_bd/MILESTONES.md" "more" ) \
+    || _fails=$((_fails+1))
+  rm -f "$_bd/SPEC.md" "$_bd/MILESTONES.md" 2>/dev/null; rmdir "$_bd" 2>/dev/null || true
 
   # domain lists
   ( export FORBIDDEN_ARTIFACTS="LIVE_CONFIRMED"; _run forbidden-artifacts "domain artifact" Write "LIVE_CONFIRMED" "1" ) \
