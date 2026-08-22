@@ -54,7 +54,11 @@ set -uo pipefail
 # NOT set -e. A failed optional step must be REPORTED, not silently abort a
 # half-finished install. Every step that matters checks its own exit status.
 
-RT_INSTALLER_VERSION="1.1.0"
+RT_INSTALLER_VERSION="1.2.0"
+# Install verification tier: quick (default, ~25s) | full (~95s) | smoke (~1s) | none.
+# Quick is every security wall and meta-invariant. Full is the whole suite and is
+# what you run once, and after any control-layer change.
+VERIFY_TIER="${RATCHET_VERIFY_TIER:-quick}"
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || {
   printf 'install: cannot resolve my own directory\n' >&2; exit 2; }
@@ -493,6 +497,8 @@ while [ $# -gt 0 ]; do
     --uninstall)       UNINSTALL=1 ;;
     --substitute-only) SUBST_ONLY=1 ;;
     --no-verify)       RUN_VERIFY=0 ;;
+    --verify)  shift; VERIFY_TIER="${1:-quick}" ;;
+    --verify=*) VERIFY_TIER="${1#*=}" ;;
     --quiet|-q)        RT_QUIET=1 ;;
     --no-color|--no-colour) NO_COLOR=1; export NO_COLOR ;;
     --ascii)           RT_ASCII=1 ;;
@@ -1066,7 +1072,7 @@ TS="$(date -u +%Y%m%dT%H%M%SZ)"
 # ---------------------------------------------------------------- 5.1 dirs --
 rt_sub "Scaffolding the four-directory partition"
 for d in \
-  .claude/hooks/stack .claude/agents \
+  .claude/hooks/stack .claude/agents .claude/doctrine \
   .context/archive/decisions \
   .pipeline/checkpoints .pipeline/escalations .pipeline/dispatch .pipeline/archive \
   .agent-development/runs .agent-development/consolidated \
@@ -1076,8 +1082,8 @@ for d in \
 do
   mkdirp "$d"
 done
-ok ".claude/ (control layer, agent-unwritable)"
-ok ".context/ (human contracts, never agent-edited)"
+ok ".claude/ (control layer, agent-unwritable: hooks, agents, doctrine)"
+ok ".context/ (your three contracts: SPEC, MILESTONES, DECISIONS)"
 ok ".pipeline/ (run scratch, mostly gitignored)"
 ok ".agent-development/ (learning loop, tracked, never pruned)"
 ok "docs/evidence/, secrets/"
@@ -1117,14 +1123,21 @@ copy_tree() { # copy_tree <rel-subdir> <mode> [name-filter-ext]
 copy_tree ".claude/hooks"       replace
 copy_tree ".claude/hooks/stack" replace
 copy_tree ".claude/agents"      replace
+# Doctrine docs. Harness-owned exactly like the hooks: identical in every
+# project, carrying no project content, and the only channel by which a doctrine
+# change reaches an existing install. Copied unconditionally so an update
+# actually refreshes them; the human's contracts next door in .context/ are the
+# ones that are written if-absent.
+copy_tree ".claude/doctrine"    replace
 
 # ------------------------------------------------------------- 5.3 context --
 # Human-owned. Written ONLY when absent -- an upgrade must never rewrite a SPEC.
+# .context/ holds exactly three contracts: SPEC.md, MILESTONES.md, DECISIONS.md.
+# The doctrine that used to sit beside them now lives in .claude/doctrine/.
 rt_sub "Human-owned contracts (.context/)"
 for f in "$HARNESS_DIR/.context"/*; do
   [ -f "$f" ] || continue
   base="$(basename "$f")"
-  if [ "$base" = "CLAUDE.md" ]; then continue; fi   # handled below, specially
   if [ -f "$TARGET/.context/$base" ]; then
     info "kept existing .context/$base (yours; not overwritten)"
   else
@@ -1135,33 +1148,27 @@ done
 # --- CLAUDE.md: never clobber ---------------------------------------------
 # Two different files are called CLAUDE.md and the difference matters. The
 # harness's copy is the orchestrator's operating manual and belongs in
-# .context/. A project's own root CLAUDE.md is instructions the human wrote for
-# their repo, and overwriting it would delete something we cannot regenerate.
+# .claude/doctrine/, where it is harness-owned and replaced on update. A
+# project's own root CLAUDE.md is instructions the human wrote for their repo,
+# and overwriting it would delete something we cannot regenerate.
 CLAUDE_CONFLICT=0
-if [ -f "$HARNESS_DIR/.context/CLAUDE.md" ]; then
-  if [ -f "$TARGET/.context/CLAUDE.md" ]; then
-    info "kept existing .context/CLAUDE.md (yours; not overwritten)"
-  else
-    copy_file "$HARNESS_DIR/.context/CLAUDE.md" ".context/CLAUDE.md" if-absent \
-      && ok ".context/CLAUDE.md (orchestrator operating manual)"
-  fi
-
+if [ -f "$HARNESS_DIR/.claude/doctrine/CLAUDE.md" ]; then
   if [ -f "$TARGET/CLAUDE.md" ]; then
     CLAUDE_CONFLICT=1
-    copy_file "$HARNESS_DIR/.context/CLAUDE.md" "CLAUDE.ratchet.md" replace \
+    copy_file "$HARNESS_DIR/.claude/doctrine/CLAUDE.md" "CLAUDE.ratchet.md" replace \
       && warn "you already have a root CLAUDE.md. It was NOT touched."
     say "        Ratchet's operating manual was written to CLAUDE.ratchet.md instead."
     say "        Claude Code reads root CLAUDE.md automatically and does NOT read"
     say "        CLAUDE.ratchet.md, so until you act, the harness's doctrine is"
     say "        installed but not loaded. Do ONE of these:"
-    say "          (a) add this line to your CLAUDE.md:   @.context/CLAUDE.md"
+    say "          (a) add this line to your CLAUDE.md:   @.claude/doctrine/CLAUDE.md"
     say "          (b) merge CLAUDE.ratchet.md into your CLAUDE.md by hand"
     say "        (a) is what we recommend: it keeps the two files separately"
-    say "        upgradeable, and .context/CLAUDE.md is the file Ratchet updates."
+    say "        upgradeable, and .claude/doctrine/CLAUDE.md is the file Ratchet updates."
   else
     if [ "$DRY_RUN" != "1" ]; then
-      printf '@.context/CLAUDE.md\n' > "$TARGET/CLAUDE.md" && record "F CLAUDE.md"
-      ok "CLAUDE.md -> @.context/CLAUDE.md (one-line import; edit freely, it is yours)"
+      printf '@.claude/doctrine/CLAUDE.md\n' > "$TARGET/CLAUDE.md" && record "F CLAUDE.md"
+      ok "CLAUDE.md -> @.claude/doctrine/CLAUDE.md (one-line import; edit freely, it is yours)"
     else
       dry "write CLAUDE.md"
     fi
@@ -1610,7 +1617,7 @@ target, mapfile = sys.argv[1], sys.argv[2]
 with open(mapfile, encoding="utf-8") as fh:
     subs = json.load(fh)
 
-ROOTS = [".claude/agents", ".claude/hooks", ".context", ".agent-development", "docs"]
+ROOTS = [".claude/agents", ".claude/doctrine", ".claude/hooks", ".context", ".agent-development", "docs"]
 FILES = [".claude/settings.json", "CLAUDE.md", "CLAUDE.ratchet.md"]
 SKIP_EXT = {".pyc", ".png", ".jpg", ".gif", ".zip", ".gz", ".key", ".pem"}
 SKIP_NAME = {"domain.config.sh"}   # generated from answers; never re-templated
@@ -1804,7 +1811,15 @@ VERIFY_RC=0
 VERIFY_STATE="not run"
 if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
   rt_phase 7 "Install verification"
-  if [ -f "$TARGET/.claude/hooks/test_hooks.py" ]; then
+  VERIFY_FLAG=""
+case "$VERIFY_TIER" in
+  quick) VERIFY_FLAG="--quick" ;;
+  smoke) VERIFY_FLAG="--smoke" ;;
+  full)  VERIFY_FLAG="" ;;
+  none)  VERIFY_FLAG="" ;;
+  *) warn "unknown --verify tier '$VERIFY_TIER'; using quick."; VERIFY_TIER=quick; VERIFY_FLAG="--quick" ;;
+esac
+if [ -f "$TARGET/.claude/hooks/test_hooks.py" ]; then
     # BOUND IT. The hook suite is large and grows; on a slow host it can run for
     # minutes. An installer that hangs with no output is indistinguishable from
     # an installer that crashed, and the person watching will Ctrl-C it halfway
@@ -1813,7 +1828,7 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
     VERIFY_TIMED_OUT=0
     rt_spin_start "running the hook suite (bounded at ${VT}s; this is the slow step)..."
     if command -v timeout >/dev/null 2>&1; then
-      VOUT="$(cd "$TARGET" && timeout "$VT" $PY .claude/hooks/test_hooks.py 2>&1)"
+      VOUT="$(cd "$TARGET" && timeout "$VT" $PY .claude/hooks/test_hooks.py $VERIFY_FLAG 2>&1)"
       VERIFY_RC=$?
       rt_spin_kill
       if [ "$VERIFY_RC" = "124" ]; then
@@ -1827,7 +1842,7 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
         VERIFY_RC=0
       fi
     else
-      VOUT="$(cd "$TARGET" && $PY .claude/hooks/test_hooks.py 2>&1)"
+      VOUT="$(cd "$TARGET" && $PY .claude/hooks/test_hooks.py $VERIFY_FLAG 2>&1)"
       VERIFY_RC=$?
       rt_spin_kill
     fi
@@ -1880,8 +1895,20 @@ if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
     say "        host's normal state, and the postcondition would then pass while the"
     say "        control layer is broken. Fix the suite, then run:"
     say "            .claude/hooks/approve.sh --postcondition-baseline"
+  elif [ "${VERIFY_STATE%% *}" = "PASS" ]; then
+    # The suite just ran and nothing failed. The baseline IS that failure set, so
+    # it is provably empty -- re-running the whole suite to rediscover "nothing
+    # fails" is pure waste, and it was doubling install time. Write it directly.
+    PCB="$TARGET/.pipeline/escalations/postcondition-baseline.txt"
+    mkdir -p "$(dirname "$PCB")" 2>/dev/null || true
+    if : > "$PCB" 2>/dev/null; then
+      ok "recorded the postcondition baseline (empty: the suite is green here)"
+    else
+      warn "could not write the postcondition baseline. Run it yourself:"
+      say "            .claude/hooks/approve.sh --postcondition-baseline"
+    fi
   elif [ -x "$TARGET/.claude/hooks/approve.sh" ]; then
-    # This re-runs the hook suite to record the floor, so it gets the same bound.
+    # Verification was skipped or not run, so we do not know the floor: ask for it.
     PCB_TO=""
     command -v timeout >/dev/null 2>&1 && PCB_TO="timeout ${RATCHET_INSTALL_VERIFY_TIMEOUT:-900}"
     rt_spin_start "recording the control-layer postcondition baseline (runs the suite again)..."
@@ -1922,7 +1949,7 @@ if [ "$DRY_RUN" != "1" ]; then
     (
       cd "$TARGET" 2>/dev/null || exit 0
       {
-        for d in .claude/hooks .claude/hooks/stack .claude/agents; do
+        for d in .claude/hooks .claude/hooks/stack .claude/agents .claude/doctrine; do
           [ -d "$d" ] || continue
           for f in "$d"/*; do
             [ -f "$f" ] || continue
@@ -1932,9 +1959,6 @@ if [ "$DRY_RUN" != "1" ]; then
             esac
             $RT_SUM "$f" 2>/dev/null
           done
-        done
-        for f in .context/CLAUDE.md .context/PIPELINE.md .context/TEMPLATE.md .context/UPGRADING.md; do
-          [ -f "$f" ] && $RT_SUM "$f" 2>/dev/null
         done
       } | sed 's|  \./|  |' > .claude/.ratchet-manifest.tmp 2>/dev/null
       mv -f .claude/.ratchet-manifest.tmp .claude/.ratchet-manifest 2>/dev/null
@@ -2021,8 +2045,9 @@ say "           -F 'enforce_admins=true' -F 'restrictions=null' -F 'required_sta
 say "     (or click it in Settings > Branches -- honestly, do that.)"
 say ""
 say "  3. THE TWO CONTRACTS. They ship as placeholders on purpose: the harness"
-say "     does not guess your project. Have Claude draft them from TEMPLATE.md,"
-say "     then correct them yourself -- you own them (Tier 2b):"
+say "     does not guess your project. Have Claude draft them from"
+say "     .claude/doctrine/TEMPLATE.md, then correct them yourself -- you own"
+say "     them (Tier 2b):"
 say "         .context/SPEC.md         requirement ids, frozen, cited by every test"
 say "         .context/MILESTONES.md   WIN rows, each with a verify command that"
 say "                                  exits 0 for pass. A WIN row without one is a"
@@ -2036,11 +2061,11 @@ say "  cd $TARGET && claude"
 say ""
 say "  Then paste exactly this:"
 say ""
-say "      Read .context/CLAUDE.md and .context/TEMPLATE.md. SPEC.md and"
-say "      MILESTONES.md are placeholders -- interview me, then write them from"
-say "      TEMPLATE.md. Invent nothing: if you do not know a requirement or a"
-say "      verify command, ask me or leave a marked TODO(human). Stop when they"
-say "      are written, before running anything."
+say "      Read .claude/doctrine/CLAUDE.md and .claude/doctrine/TEMPLATE.md."
+say "      .context/SPEC.md and .context/MILESTONES.md are placeholders --"
+say "      interview me, then write them from TEMPLATE.md. Invent nothing: if"
+say "      you do not know a requirement or a verify command, ask me or leave a"
+say "      marked TODO(human). Stop when they are written, before running."
 say ""
 say "  It will come back with a draft SPEC and a first milestone for you to"
 say "  correct. Keep M0 small -- two WIN rows is plenty. Seeing the gates fire"

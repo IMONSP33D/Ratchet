@@ -130,7 +130,7 @@ $ErrorActionPreference = 'Continue'   # NOT Stop: a failed optional step is
                                       # reported, never allowed to abort a
                                       # half-finished install silently.
 
-$RtInstallerVersion = "1.1.0"
+$RtInstallerVersion = "1.2.0"
 $script:Warnings    = 0
 $script:MissingFiles = New-Object System.Collections.Generic.List[string]
 $script:HostFatal   = $false
@@ -1181,14 +1181,14 @@ $Ts = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmss') + 'Z'
 
 Write-RtSub 'Scaffolding the four-directory partition'
 foreach ($d in @(
-    '.claude/hooks/stack', '.claude/agents',
+    '.claude/hooks/stack', '.claude/agents', '.claude/doctrine',
     '.context/archive/decisions',
     '.pipeline/checkpoints', '.pipeline/escalations', '.pipeline/dispatch', '.pipeline/archive',
     '.agent-development/runs', '.agent-development/consolidated',
     '.agent-development/metrics', '.agent-development/proposals',
     'docs/evidence', 'secrets')) { New-TargetDirectory -Rel $d }
-Write-Ok '.claude\ (control layer, agent-unwritable)'
-Write-Ok '.context\ (human contracts, never agent-edited)'
+Write-Ok '.claude\ (control layer, agent-unwritable: hooks, agents, doctrine)'
+Write-Ok '.context\ (your three contracts: SPEC, MILESTONES, DECISIONS)'
 Write-Ok '.pipeline\ (run scratch, mostly gitignored)'
 Write-Ok '.agent-development\ (learning loop, tracked, never pruned)'
 Write-Ok 'docs\evidence\, secrets\'
@@ -1197,12 +1197,14 @@ Write-RtSub 'Copying the harness'
 Copy-HarnessTree '.claude/hooks'       'replace'
 Copy-HarnessTree '.claude/hooks/stack' 'replace'
 Copy-HarnessTree '.claude/agents'      'replace'
+# Doctrine docs. Harness-owned exactly like the hooks: identical in every
+# project and replaced unconditionally, so an update actually refreshes them.
+Copy-HarnessTree '.claude/doctrine'    'replace'
 
 Write-RtSub 'Human-owned contracts (.context\)'
 $ctxSrc = Join-Path $HarnessDir '.context'
 if (Test-Path -LiteralPath $ctxSrc) {
     foreach ($f in (Get-ChildItem -LiteralPath $ctxSrc -File)) {
-        if ($f.Name -eq 'CLAUDE.md') { continue }
         $rel = ".context/$($f.Name)"
         if (Test-Path -LiteralPath (Join-Path $TargetPath ($rel -replace '/', '\'))) {
             Write-Info "kept existing $rel (yours; not overwritten)"
@@ -1213,17 +1215,12 @@ if (Test-Path -LiteralPath $ctxSrc) {
 }
 
 # --- CLAUDE.md: never clobber ---------------------------------------------
-$harnessClaude = Join-Path $ctxSrc 'CLAUDE.md'
+# The harness's copy is the orchestrator's operating manual and lives in
+# .claude\doctrine\, harness-owned and replaced on update. A project's own root
+# CLAUDE.md is the human's and is never overwritten.
+$harnessClaude = Join-Path $HarnessDir '.claude/doctrine/CLAUDE.md'
 if (Test-Path -LiteralPath $harnessClaude) {
-    $ctxClaude  = Join-Path $TargetPath '.context\CLAUDE.md'
     $rootClaude = Join-Path $TargetPath 'CLAUDE.md'
-    if (Test-Path -LiteralPath $ctxClaude) {
-        Write-Info 'kept existing .context\CLAUDE.md (yours; not overwritten)'
-    } else {
-        if (Copy-HarnessFile -SourcePath $harnessClaude -Rel '.context/CLAUDE.md' -Mode 'if-absent') {
-            Write-Ok '.context\CLAUDE.md (orchestrator operating manual)'
-        }
-    }
     if (Test-Path -LiteralPath $rootClaude) {
         [void](Copy-HarnessFile -SourcePath $harnessClaude -Rel 'CLAUDE.ratchet.md' -Mode 'replace')
         Write-Warn 'you already have a root CLAUDE.md. It was NOT touched.'
@@ -1231,15 +1228,15 @@ if (Test-Path -LiteralPath $harnessClaude) {
         Write-Cont 'Claude Code reads root CLAUDE.md automatically and does NOT read'
         Write-Cont 'CLAUDE.ratchet.md, so until you act, the harness''s doctrine is'
         Write-Cont 'installed but not loaded. Do ONE of these:'
-        Write-Cont '  (a) add this line to your CLAUDE.md:   @.context/CLAUDE.md'
+        Write-Cont '  (a) add this line to your CLAUDE.md:   @.claude/doctrine/CLAUDE.md'
         Write-Cont '  (b) merge CLAUDE.ratchet.md into your CLAUDE.md by hand'
         Write-Cont '(a) is what we recommend: it keeps the two files separately'
-        Write-Cont 'upgradeable, and .context\CLAUDE.md is the file Ratchet updates.'
+        Write-Cont 'upgradeable, and .claude\doctrine\CLAUDE.md is the file Ratchet updates.'
     } else {
         if ((Confirm-Change 'CLAUDE.md' 'write import stub')) {
-            Write-TextLf -Path $rootClaude -Content "@.context/CLAUDE.md`n"
+            Write-TextLf -Path $rootClaude -Content "@.claude/doctrine/CLAUDE.md`n"
             Add-ManifestLine 'F CLAUDE.md'
-            Write-Ok 'CLAUDE.md -> @.context/CLAUDE.md (one-line import; edit freely, it is yours)'
+            Write-Ok 'CLAUDE.md -> @.claude/doctrine/CLAUDE.md (one-line import; edit freely, it is yours)'
         }
     }
 }
@@ -1748,7 +1745,7 @@ $Subs = @{
 if ($WhatIfPreference) {
     Write-Info "WhatIf: would substitute $($Subs.Count) markers across .claude\, .context\, docs\"
 } else {
-    $roots = @('.claude\agents', '.claude\hooks', '.context', '.agent-development', 'docs')
+    $roots = @('.claude\agents', '.claude\doctrine', '.claude\hooks', '.context', '.agent-development', 'docs')
     $extra = @('.claude\settings.json', 'CLAUDE.md', 'CLAUDE.ratchet.md')
     $skipExt  = @('.pyc','.png','.jpg','.gif','.zip','.gz','.key','.pem')
     $skipName = @('domain.config.sh')
@@ -2057,7 +2054,8 @@ Write-Host '  claude'
 Write-Host ''
 Write-Host '  Then paste exactly this:'
 Write-Host ''
-Write-Host '      Read .context/CLAUDE.md, .context/SPEC.md and .context/MILESTONES.md.'
+Write-Host '      Read .claude/doctrine/CLAUDE.md, .context/SPEC.md and'
+Write-Host '      .context/MILESTONES.md.'
 Write-Host '      Confirm you understand the four-directory ownership partition and the'
 Write-Host '      two human stop points, then run milestone M0.'
 Write-Host ''

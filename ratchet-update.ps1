@@ -260,12 +260,9 @@ function Get-RtClass {
     if ($p -like '.claude/agents/*.md')      { return 'HARNESS' }
     # Doctrine docs. They ship from the harness, carry no project content of
     # their own, and are the only channel by which a doctrine change reaches an
-    # existing project. install.ps1 writes them if-absent, which is right for an
-    # install and wrong for an update.
-    if ($p -eq '.context/CLAUDE.md')      { return 'HARNESS' }
-    if ($p -eq '.context/PIPELINE.md')    { return 'HARNESS' }
-    if ($p -eq '.context/TEMPLATE.md')    { return 'HARNESS' }
-    if ($p -eq '.context/UPGRADING.md')   { return 'HARNESS' }
+    # existing project. They live under .claude\ because that is the
+    # harness-owned control layer; .context\ holds only the human's contracts.
+    if ($p -like '.claude/doctrine/*.md') { return 'HARNESS' }
     if ($p -eq 'CLAUDE.ratchet.md')       { return 'HARNESS' }
 
     # USER: the project's own work.
@@ -283,7 +280,7 @@ function Get-RtClass {
     return 'USER'
 }
 
-$DoctrineDocs = @('.context/CLAUDE.md', '.context/PIPELINE.md', '.context/TEMPLATE.md', '.context/UPGRADING.md')
+$DoctrineDocs = @('.claude/doctrine/CLAUDE.md', '.claude/doctrine/PIPELINE.md', '.claude/doctrine/TEMPLATE.md', '.claude/doctrine/UPGRADING.md')
 
 # The never-escalatable control set (CONTRACT 5.6). Drift here is reported at a
 # higher volume than drift anywhere else, because nothing lifts these rules and
@@ -503,7 +500,7 @@ function Get-BundleHarnessPaths {
         if (Test-Path -LiteralPath (Join-Path $HarnessSrc ($doc -replace '/', '\')) -PathType Leaf) { [void] $out.Add($doc) }
     }
     if ((Test-Path -LiteralPath (Join-Path $Tgt 'CLAUDE.ratchet.md') -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $HarnessSrc '.context\CLAUDE.md') -PathType Leaf)) {
+        (Test-Path -LiteralPath (Join-Path $HarnessSrc '.claude\doctrine\CLAUDE.md') -PathType Leaf)) {
         [void] $out.Add('CLAUDE.ratchet.md')
     }
     return ($out | Sort-Object -Unique)
@@ -639,14 +636,14 @@ $nNew = 0; $nUpdate = 0; $nSame = 0; $nModified = 0; $nUnverified = 0; $nOrphan 
 $BundlePaths = Get-BundleHarnessPaths
 foreach ($rel in $BundlePaths) {
     $srcRel = $rel
-    if ($rel -eq 'CLAUDE.ratchet.md') { $srcRel = '.context/CLAUDE.md' }
+    if ($rel -eq 'CLAUDE.ratchet.md') { $srcRel = '.claude/doctrine/CLAUDE.md' }
     $src = Join-Path $HarnessSrc ($srcRel -replace '/', '\')
     $dst = Join-Path $Tgt ($rel -replace '/', '\')
 
     if (-not (Test-Path -LiteralPath $dst -PathType Leaf)) {
         [void] $Rows.Add(@('NEW', 'HARNESS', $rel, 'not installed here yet'))
         $nNew = $nNew + 1
-        if ($rel.StartsWith('.context/') -or $rel -eq 'CLAUDE.ratchet.md') { [void] $DoctrineTouch.Add($rel) }
+        if ($rel.StartsWith('.claude/doctrine/') -or $rel -eq 'CLAUDE.ratchet.md') { [void] $DoctrineTouch.Add($rel) }
         continue
     }
 
@@ -692,7 +689,7 @@ foreach ($rel in $BundlePaths) {
         [void] $Rows.Add(@('UPDATE', 'HARNESS', $rel, '-'))
         $nUpdate = $nUpdate + 1
     }
-    if ($rel.StartsWith('.context/') -or $rel -eq 'CLAUDE.ratchet.md') { [void] $DoctrineTouch.Add($rel) }
+    if ($rel.StartsWith('.claude/doctrine/') -or $rel -eq 'CLAUDE.ratchet.md') { [void] $DoctrineTouch.Add($rel) }
 }
 
 # ORPHANS: harness files we installed that the new bundle no longer ships.
@@ -962,7 +959,7 @@ $InstallLog = ''
 if ($DryRun) {
     Write-Head 'Backup (dry run)'
     Write-Info ('DRY: would copy .claude\ (minus other .backup-*) to ' + $BkRel + '/claude/')
-    Write-Info ('DRY: would copy the doctrine docs it rewrites to ' + $BkRel + '/context/')
+    Write-Info ('DRY: the doctrine docs it rewrites ride along in that .claude\ copy')
     Write-Info ('DRY: would generate ' + $BkRel + '/restore.ps1')
     $InstallLog = Join-Path ([System.IO.Path]::GetTempPath()) ('rtu-install-' + $Ts + '.log')
 }
@@ -983,7 +980,6 @@ else {
     Write-Ok ('backed up .claude\ -> ' + $BkRel + '/claude/ (' + $bkN + ' files)')
 
     if ($DoctrineTouch.Count -gt 0) {
-        New-Item -ItemType Directory -Path (Join-Path $Bk 'context') -Force -ErrorAction SilentlyContinue | Out-Null
         foreach ($rel in $DoctrineTouch) {
             $srcp = Join-Path $Tgt ($rel -replace '/', '\')
             if (-not (Test-Path -LiteralPath $srcp -PathType Leaf)) { continue }
@@ -991,7 +987,11 @@ else {
                 New-Item -ItemType Directory -Path (Join-Path $Bk 'root') -Force -ErrorAction SilentlyContinue | Out-Null
                 Copy-Item -LiteralPath $srcp -Destination (Join-Path $Bk 'root') -Force -ErrorAction SilentlyContinue
             }
+            elseif ($rel.StartsWith('.claude/')) {
+                # already inside the whole-.claude\ copy taken above
+            }
             else {
+                New-Item -ItemType Directory -Path (Join-Path $Bk 'context') -Force -ErrorAction SilentlyContinue | Out-Null
                 Copy-Item -LiteralPath $srcp -Destination (Join-Path $Bk 'context') -Force -ErrorAction SilentlyContinue
             }
         }
@@ -1008,7 +1008,7 @@ else {
 # immediately before the update to @@NEWVER@@.
 #
 # It restores:   .claude\hooks\  .claude\agents\  .claude\settings.json
-#                the .claude\ dotfiles, and the doctrine docs under .context\
+#                the .claude\ dotfiles, and the doctrine docs under .claude\doctrine\
 # It does NOT touch: .pipeline\  .agent-development\  secrets\  docs\evidence\
 #                .context\SPEC.md  MILESTONES.md  DECISIONS.md  your CLAUDE.md
 # Nothing in that second list was modified by the update, so restoring it would
@@ -1023,7 +1023,7 @@ if (-not (Test-Path (Join-Path $Bk 'claude'))) {
     exit 2
 }
 Write-Host ('Rolling ' + $R + ' back to Ratchet @@OLDVER@@ ...')
-foreach ($d in @('hooks', 'agents')) {
+foreach ($d in @('hooks', 'agents', 'doctrine')) {
     $p = Join-Path $R ('.claude\' + $d)
     if (Test-Path $p) { Remove-Item -LiteralPath $p -Recurse -Force }
 }
@@ -1059,12 +1059,13 @@ exit 0
 # ============================================================================
 Write-Head 'Applying'
 
-# 9.1 doctrine docs. install.ps1 writes .context\ if-absent, which is right for
-# an install and wrong for an update, so the updater places these itself and
-# lets install.ps1's substitution pass fill the {{MARKERS}} afterwards.
+# 9.1 doctrine docs. install.ps1 replaces .claude\doctrine\ wholesale, the same
+# way it replaces the hooks; the updater still places them here first so
+# CLAUDE.ratchet.md is covered too, and lets install.ps1's substitution pass
+# fill the {{MARKERS}} afterwards.
 foreach ($rel in $DoctrineTouch) {
     $srcRel = $rel
-    if ($rel -eq 'CLAUDE.ratchet.md') { $srcRel = '.context/CLAUDE.md' }
+    if ($rel -eq 'CLAUDE.ratchet.md') { $srcRel = '.claude/doctrine/CLAUDE.md' }
     $src = Join-Path $HarnessSrc ($srcRel -replace '/', '\')
     if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { continue }
     if ($DryRun) {
@@ -1134,24 +1135,24 @@ if ((-not $DryRun) -and (Test-Path -LiteralPath (Join-Path $Bk 'claude\settings.
             Write-Say '        Our deny beats your allow and your ask. If one of these is load-bearing'
             Write-Say '        for this project, it does not go back in settings.json by hand: it is a'
             Write-Say '        domain-pack question (SECRET_EXEMPTIONS, FORBIDDEN_EXEC_TOKENS) or a'
-            Write-Say '        named local patch. See .context\UPGRADING.md section 5.'
+            Write-Say '        named local patch. See .claude\doctrine\UPGRADING.md section 5.'
         }
     }
     catch { Write-Warn 'could not compare the pre-merge and post-merge permission surfaces.' }
 }
 
 # install.ps1's first run writes a root CLAUDE.md containing the one-line import
-# "@.context/CLAUDE.md". Every run after that sees a root CLAUDE.md, concludes
+# "@.claude/doctrine/CLAUDE.md". Every run after that sees a root CLAUDE.md, concludes
 # the project had its own, and writes CLAUDE.ratchet.md plus a warning saying
 # the doctrine is "installed but not loaded" -- which is false when the import
 # is already there. Say so, once, rather than let the warning stand.
 if ((-not $DryRun) -and (Test-Path -LiteralPath (Join-Path $Tgt 'CLAUDE.ratchet.md') -PathType Leaf)) {
     $rootClaude = Join-Path $Tgt 'CLAUDE.md'
     if (Test-Path -LiteralPath $rootClaude -PathType Leaf) {
-        $hit = Select-String -LiteralPath $rootClaude -Pattern '@\.context/CLAUDE\.md' -ErrorAction SilentlyContinue
+        $hit = Select-String -LiteralPath $rootClaude -Pattern '@\.claude/doctrine/CLAUDE\.md' -ErrorAction SilentlyContinue
         if ($null -ne $hit) {
             Write-Info 'CLAUDE.ratchet.md was (re)written by install.ps1, but your root CLAUDE.md'
-            Write-Info '  already imports @.context/CLAUDE.md, so the doctrine IS loaded and that'
+            Write-Info '  already imports @.claude/doctrine/CLAUDE.md, so the doctrine IS loaded and that'
             Write-Info '  file is a redundant copy. Deleting it is safe and this updater will not'
             Write-Info '  put it back unless install.ps1 does.'
         }
@@ -1171,8 +1172,8 @@ if (($ModifiedList.Count -gt 0) -and (-not $ForceOverwriteModified)) {
         }
         $srcBk = ''
         if ($rel -eq 'CLAUDE.ratchet.md') { $srcBk = Join-Path $Bk 'root\CLAUDE.ratchet.md' }
-        elseif ($rel.StartsWith('.context/')) { $srcBk = Join-Path $Bk ('context\' + (Split-Path -Leaf ($rel -replace '/', '\'))) }
         elseif ($rel.StartsWith('.claude/')) { $srcBk = Join-Path $Bk ('claude\' + ($rel.Substring(8) -replace '/', '\')) }
+        elseif ($rel.StartsWith('.context/')) { $srcBk = Join-Path $Bk ('context\' + (Split-Path -Leaf ($rel -replace '/', '\'))) }
         if (($srcBk -ne '') -and (Test-Path -LiteralPath $srcBk -PathType Leaf)) {
             $dstLocal = (Join-Path $Tgt ($rel -replace '/', '\')) + '.local-' + $Ts
             Copy-Item -LiteralPath $srcBk -Destination $dstLocal -Force -ErrorAction SilentlyContinue
@@ -1188,7 +1189,7 @@ if (($ModifiedList.Count -gt 0) -and (-not $ForceOverwriteModified)) {
         Write-Say ''
         Write-Say '  Diff each one against what just landed, decide, then delete it. If the edit'
         Write-Say '  is still wanted, it does not go back in by hand: it goes upstream, or it'
-        Write-Say '  becomes a named local patch. See .context\UPGRADING.md.'
+        Write-Say '  becomes a named local patch. See .claude\doctrine\UPGRADING.md.'
     }
 }
 
@@ -1240,7 +1241,7 @@ if ($CfgOverridden -gt 0) {
 if ($ControlDrift.Count -gt 0) {
     Add-PhaRow 'control-set-drift-detected' ('Before this update, these never-escalatable control-set files did not match what was installed: `' +
         ($ControlDrift -join ' ') + '`. They have been replaced with harness ' + $BundleVersion + ' and the previous contents kept as `.local-' + $Ts +
-        '`. Read the diff and decide whether the edit was a deliberate local patch (record it in DECISIONS.md and see `.context/UPGRADING.md`), or drift that should stay gone.')
+        '`. Read the diff and decide whether the edit was a deliberate local patch (record it in DECISIONS.md and see `.claude/doctrine/UPGRADING.md`), or drift that should stay gone.')
 }
 elseif ($ModifiedList.Count -gt 0) {
     Add-PhaRow 'harness-files-locally-modified' ('These harness files did not match what was installed and were replaced by harness ' +
@@ -1437,7 +1438,7 @@ if ($VerifyState -eq 'FAIL') {
 
 Write-Head 'FIRST SESSION AFTER AN UPDATE'
 Write-Say ''
-Write-Say '  Read .context\UPGRADING.md -- it is the doctrine for this, and the update'
+Write-Say '  Read .claude\doctrine\UPGRADING.md -- it is the doctrine for this, and the update'
 Write-Say '  may have just rewritten it. The short version:'
 Write-Say '    1. Re-read .agent-development\ACTIVE-LESSONS.md; a lesson can be obsoleted'
 Write-Say '       by a scaffold change and a stale lesson costs tokens every run.'

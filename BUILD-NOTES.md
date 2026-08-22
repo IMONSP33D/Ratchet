@@ -1,4 +1,4 @@
-# Ratchet 1.1.0 — build notes
+# Ratchet 1.2.0 — build notes
 
 What this is, what was verified, and what was not. Read the honest-limitations section
 before you trust anything here in anger.
@@ -132,7 +132,7 @@ choco, plus optional stack tools. `--check` reports and changes nothing; `--dry-
 plan; nothing is sudo'd without showing the command first. It refuses to curl-pipe an installer,
 refuses to pip into a PEP-668 interpreter, and detects the Windows Store python stub by path.
 
-**New: `ratchet-update.sh` / `.ps1` + `.context/UPGRADING.md`.** Mid-project scaffold upgrades.
+**New: `ratchet-update.sh` / `.ps1` + `.claude/doctrine/UPGRADING.md`.** Mid-project scaffold upgrades.
 Every path is classified HARNESS (replaced), USER (never touched), or MERGED (settings.json only) —
 and the classifier's default is USER, so an unrecognised path is never touched. It detects harness
 files you edited locally against a checksum baseline, preserves them as `.local-<timestamp>`,
@@ -149,7 +149,7 @@ redirected. New flags: `--quiet`, `--no-color`, `--ascii`.
 
 **`.context/` is now bare bones (2604 → 2107 lines).** `SPEC.md` and `MILESTONES.md` ship as
 ~15-line placeholders carrying `<!-- ratchet:unwritten -->`; `CONVENTIONS.md` is gone. In their
-place is **`.context/TEMPLATE.md`** (395 lines): the one structural guide an agent reads to write
+place is **`.claude/doctrine/TEMPLATE.md`** (395 lines): the one structural guide an agent reads to write
 the project's real contracts — taxonomy, AV register, WIN-row spec, naming doctrine, every frozen
 format, and one minimal two-row example. `check_done.py` detects the unwritten marker and fails
 with an actionable message instead of passing vacuously on a file with no WIN rows.
@@ -162,3 +162,57 @@ with an actionable message instead of passing vacuously on a file with no WIN ro
 | `install.sh` never wrote `.ratchet-version` / `.ratchet-manifest` | MEDIUM — the first update could not tell your edits from upstream changes, so everything read as UNVERIFIED | install records both at the end of a successful install |
 | host-check failure told you to "fix the FAIL lines" with no tool to do it | LOW | points at `ratchet-dependencies.sh --check` |
 | first-run instructions told the agent to read SPEC/MILESTONES, which are now placeholders | LOW | tells it to read `TEMPLATE.md`, interview you, and invent nothing |
+
+
+---
+
+# 1.2.0 — two owner questions, both correct
+
+## 1. `.context/` now holds only what you own
+
+The complaint was fair: `.context/` was supposed to be *your project's contracts*, and it still had
+seven files including a 912-line orchestrator manual. Those four documents ship identically to every
+project and are replaced wholesale by the updater — they were harness doctrine sitting in the
+human's folder, which blurs the very ownership partition the harness is built on.
+
+Moved to `.claude/doctrine/` (the control layer: harness-owned, agent-unwritable, replaced on
+update): `CLAUDE.md`, `PIPELINE.md`, `TEMPLATE.md`, `UPGRADING.md`.
+
+`.context/` is now exactly three files, and every one of them is yours:
+
+| file | what it is |
+|---|---|
+| `SPEC.md` | placeholder until written — your requirement ids |
+| `MILESTONES.md` | placeholder until written — your WIN rows |
+| `DECISIONS.md` | header + format, fills as you decide things |
+
+~167 path references were repointed. The root `CLAUDE.md` pointer is now
+`@.claude/doctrine/CLAUDE.md`, doctrine is copied unconditionally (like hooks) rather than
+if-absent, and the updater classifies `.claude/doctrine/**` as HARNESS — verified: a local edit to
+`PIPELINE.md` is reported and preserved, while `SPEC.md` is untouched.
+
+## 2. Install verification: 230s -> 28s
+
+900 was a *ceiling*, never the runtime — but the runtime was ~95s and the installer ran the suite
+**twice** (once to verify, once to record the postcondition baseline), so a scaffolding step really
+was costing about four minutes. Two fixes:
+
+- **The baseline no longer re-runs anything.** It records "which items currently fail". After a
+  green run that set is provably empty, so it is written directly. That alone halved install time.
+- **A `--quick` verification tier, now the default.** 50 tests in ~25s: every security wall
+  (write-effect-beats-read-carve-out, secrets, ship flow, Tier 2b, approval single-use) and every
+  meta-invariant that catches a botched install (rule classification, deny-partition consistency,
+  the 12 law copies, genericity, the bash probe). `--verify full` runs all 177 in ~95s;
+  `--verify smoke` is ~1s; `--verify none` skips it.
+
+Run `--verify full` once, and after any control-layer change. The quick tier is chosen so that a
+scaffolding step nobody waits for does not become a scaffolding step people skip.
+
+**Also fixed:** passing a bare class name to `test_hooks.py` silently ran the entire suite instead
+of filtering, which made per-class timing impossible. A bare positional now filters like `-k`.
+
+| measurement | 1.1.0 | 1.2.0 |
+|---|---|---|
+| install wall time | ~230s | **28s** |
+| `.context/` files / lines | 7 / 2107 | **3 / ~125** |
+| default verification | full, 177 tests | quick, 50 tests |

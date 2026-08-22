@@ -163,7 +163,7 @@ s_check_tier2b() {
 
   if rt_path_matches_list "$S_REL" "${GOVERNING_CORPUS:-}"; then
     s_refuse governing-corpus-write \
-      "This path is a human-owned contract: $S_REL" \
+      "This path is in the governing corpus: $S_REL" \
       "The governing corpus is Tier 2b: read it freely, never write it. Propose the change through" \
       "the decision log and the retrospective, which is the path a human can actually review."
   fi

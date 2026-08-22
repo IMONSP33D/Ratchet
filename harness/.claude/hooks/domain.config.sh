@@ -4,7 +4,7 @@
 # contain a project noun. Rewriting this file re-points every guard at a new domain.
 # ------------------------------------------------------------------------------------------------
 # Shipped state: the EMPTY domain ("none"). Every list is empty EXCEPT the two the harness cannot
-# safely run without - GOVERNING_CORPUS (the human-owned contracts) and SECRET_PATTERNS.
+# safely run without - GOVERNING_CORPUS (the contracts and the doctrine) and SECRET_PATTERNS.
 # Empty lists are VALID (CONTRACT SS2.2): the harness still protects secrets, the governing corpus
 # and the control layer. Filling a list only ever ADDS refusals.
 #
@@ -50,17 +50,19 @@ FORBIDDEN_ARTIFACTS="${FORBIDDEN_ARTIFACTS:-}"
 BANNED_READ_FILES="${BANNED_READ_FILES:-}"
 
 # --- GOVERNING_CORPUS ------------------------------------------------------------------------------
-# The human-owned contracts (Tier 2b). Agents READ these constantly and may never WRITE them.
-# Never-escalatable: no approval, card or domain pack lifts a write refusal here.
+# The governing corpus (Tier 2b). Agents READ these constantly and may never WRITE them.
+# Two owners, one rule: .context/SPEC.md and .context/MILESTONES.md are the human's contracts;
+# .claude/doctrine/*.md is harness doctrine, shipped identically to every project and replaced on
+# update. Both are never-escalatable: no approval, card or domain pack lifts a write refusal here.
 # Rule id emitted: governing-corpus-write
 #
 # NOTE on DECISIONS.md - deliberately NOT in this list. CONTRACT SS7.3 requires that "appending a
 # decision must never be the failing action": over the hot-file hard cap the checker emits
 # ROLLOVER-REQUIRED and the guard still permits the append. Adding DECISIONS.md here would make the
 # decision log unwritable and strand every ambiguity the agent is required to log.
-GOVERNING_CORPUS="${GOVERNING_CORPUS:-.context/CLAUDE.md
-.context/PIPELINE.md
-.context/TEMPLATE.md
+GOVERNING_CORPUS="${GOVERNING_CORPUS:-.claude/doctrine/CLAUDE.md
+.claude/doctrine/PIPELINE.md
+.claude/doctrine/TEMPLATE.md
 .context/SPEC.md
 .context/MILESTONES.md}"
 
@@ -136,9 +138,9 @@ ARBITER_LABEL="${ARBITER_LABEL:-Escalate to a higher-tier model}"
 # # A superseded 400KB full-corpus dump. Loading it poisons context with stale requirements.
 # BANNED_READ_FILES=".context/archive/legacy-master-spec.md"
 #
-# GOVERNING_CORPUS=".context/CLAUDE.md
-# .context/PIPELINE.md
-# .context/TEMPLATE.md
+# GOVERNING_CORPUS=".claude/doctrine/CLAUDE.md
+# .claude/doctrine/PIPELINE.md
+# .claude/doctrine/TEMPLATE.md
 # .context/SPEC.md
 # .context/MILESTONES.md"
 #

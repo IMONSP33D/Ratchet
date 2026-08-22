@@ -6,10 +6,10 @@
 because there is nothing below this line.
 
 **Who owns it.** The human, Tier 2b. Agents MUST NOT edit this file once it exists; the one sanctioned
-exception is the single pre-run drafting pass described in `.context/TEMPLATE.md`, whose output is
+exception is the single pre-run drafting pass described in `.claude/doctrine/TEMPLATE.md`, whose output is
 handed to the human to own.
 
-**How to write it.** Read `.context/TEMPLATE.md`. It carries the requirement-ID taxonomy, the section
+**How to write it.** Read `.claude/doctrine/TEMPLATE.md`. It carries the requirement-ID taxonomy, the section
 structure, the AV register, and the rule that a requirement is interviewed out of the human and never
 invented.
 

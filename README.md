@@ -41,13 +41,13 @@ the project on `C:\` and use PowerShell or Git-Bash.
 
 Your domain pack, contracts, findings, retros and secrets are never touched; harness files you
 edited locally are preserved as `.local-<timestamp>` rather than clobbered; `.claude/` is backed
-up with a one-line rollback. See `.context/UPGRADING.md`, especially for the agent-driven path —
+up with a one-line rollback. See `.claude/doctrine/UPGRADING.md`, especially for the agent-driven path —
 the control layer is Tier 2b, so pipeline changes go through the supervisor-changeset pattern.
 
 ## Writing your project's contracts
 
 `.context/SPEC.md` and `.context/MILESTONES.md` ship as placeholders on purpose. The harness does
-not guess your project. Point Claude at `.context/TEMPLATE.md` — it interviews you and writes them.
+not guess your project. Point Claude at `.claude/doctrine/TEMPLATE.md` — it interviews you and writes them.
 Correct what it drafts; you own those two files.
 
 ## Who this is for
@@ -73,8 +73,8 @@ downstream check then agrees with it.
 
 | Directory | Owner | The agent may | Why |
 |---|---|---|---|
-| `.claude/` | **The control layer** | read, never write | The guards, the gates, the agent definitions and the permission surface. If the agent can edit the thing that refuses it, the refusal is decorative. |
-| `.context/` | **You, the human** | read, never write | `SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, `CLAUDE.md`. The contracts. An agent that can move the finish line has not reached it. (`DECISIONS.md` is the one exception — appending a decision must never be the failing action.) |
+| `.claude/` | **The control layer** | read, never write | The guards, the gates, the agent definitions, the harness doctrine in `doctrine/` (`CLAUDE.md`, `PIPELINE.md`, `TEMPLATE.md`, `UPGRADING.md`) and the permission surface. If the agent can edit the thing that refuses it, the refusal is decorative. |
+| `.context/` | **You, the human** | read, never write | Exactly three files: `SPEC.md`, `MILESTONES.md`, `DECISIONS.md`. The contracts, and nothing the harness ships. An agent that can move the finish line has not reached it. (`DECISIONS.md` is the one exception — appending a decision must never be the failing action.) |
 | `.pipeline/` | **The agent, per run** | read and write freely | Scratch, findings, checkpoints, manifests, the consent record. Cleared and archived at gate closure. This is where the agent thinks. |
 | `.agent-development/` | **The learning loop** | append | Run retrospectives, consolidated lessons, pending human actions. Tracked forever, never pruned. This is the only thing that makes run N+1 better than run N. |
 
@@ -261,7 +261,7 @@ cd ratchet
   original is backed up to `settings.json.bak-<timestamp>` first.
 - An existing root `CLAUDE.md` is **never clobbered**. Ratchet's manual goes to
   `CLAUDE.ratchet.md` and the installer tells you to add one line —
-  `@.context/CLAUDE.md` — to yours.
+  `@.claude/doctrine/CLAUDE.md` — to yours.
 - Human-owned documents (`.context/`, `docs/`, `.agent-development/`) are
   written **only when absent**. An upgrade never rewrites your SPEC.
 - Your domain pack (`.claude/hooks/domain.config.sh`) is preserved on upgrade,

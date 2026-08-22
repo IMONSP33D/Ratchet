@@ -316,10 +316,10 @@ g_check_all() {
     fi
   fi
 
-  # 3b. governing corpus (human-owned contracts): readable always, writable never
+  # 3b. governing corpus (the human's contracts + harness doctrine): read always, write never
   if hit=$(g_match_in "$G_WRITES" "${GOVERNING_CORPUS:-}"); then
     g_refuse governing-corpus-write \
-      "The command would write a human-owned contract: $hit" \
+      "The command would write a governing-corpus file: $hit" \
       "The governing corpus is Tier 2b. Propose the change through the decision log and the" \
       "retrospective; reading it is always allowed, changing it is never the agent's to do."
   fi

@@ -700,7 +700,7 @@ def check_win_rows(ctx):
     if not milestone:
         return skip(n, name, "no active run (RUN_ACTIVE empty): nothing to prove")
     if milestones_unwritten(ctx):
-        msg = ("MILESTONES.md has not been written yet --- read .context/TEMPLATE.md "
+        msg = ("MILESTONES.md has not been written yet --- read .claude/doctrine/TEMPLATE.md "
                "and write it; a run cannot be judged against a milestone that does "
                "not exist")
         return bad(n, name, msg, [msg])

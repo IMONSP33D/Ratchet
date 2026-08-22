@@ -82,6 +82,7 @@ HOOKS = Path(__file__).resolve().parent
 CLAUDE = HOOKS.parent
 ROOT = CLAUDE.parent
 AGENTS = CLAUDE / "agents"
+DOCTRINE = CLAUDE / "doctrine"
 
 BLOCK = 2  # PreToolUse block exit code (CONTRACT 3)
 OK = 0
@@ -320,6 +321,8 @@ class RepoCase(unittest.TestCase):
         shutil.rmtree(self.tmp / ".claude/hooks/__pycache__", ignore_errors=True)
         if AGENTS.is_dir():
             shutil.copytree(AGENTS, self.tmp / ".claude/agents", dirs_exist_ok=True)
+        if DOCTRINE.is_dir():
+            shutil.copytree(DOCTRINE, self.tmp / ".claude/doctrine", dirs_exist_ok=True)
         for name in ("settings.json", "settings.template.json"):
             if (CLAUDE / name).is_file():
                 shutil.copy2(CLAUDE / name, self.tmp / ".claude" / name)
@@ -958,7 +961,7 @@ class TestDoctrineDocsAgree(RepoCase):
     def docs(self):
         found = {}
         for name in ("CLAUDE.md", "PIPELINE.md"):
-            for cand in (self.tmp / ".context" / name, self.tmp / name):
+            for cand in (self.tmp / ".claude/doctrine" / name, self.tmp / name):
                 if cand.is_file():
                     found[name] = read(cand)
                     break
@@ -967,7 +970,7 @@ class TestDoctrineDocsAgree(RepoCase):
     def test_every_seat_named_in_either_doc_exists_as_a_definition(self):
         docs = self.docs()
         if not docs:
-            self.skipTest("not built yet: .context/CLAUDE.md and .context/PIPELINE.md")
+            self.skipTest("not built yet: .claude/doctrine/CLAUDE.md and PIPELINE.md")
         agents = self.tmp / ".claude/agents"
         if not agents.is_dir():
             self.skipTest("not built yet: .claude/agents/")
@@ -987,7 +990,7 @@ class TestDoctrineDocsAgree(RepoCase):
     def test_the_two_docs_name_the_same_roster(self):
         docs = self.docs()
         if len(docs) < 2:
-            self.skipTest("both .context/CLAUDE.md and .context/PIPELINE.md are needed")
+            self.skipTest("both .claude/doctrine/CLAUDE.md and PIPELINE.md are needed")
         rosters = {
             name: {s for s in SEATS if re.search(r"`%s`" % re.escape(s), body)}
             for name, body in docs.items()
@@ -1500,7 +1503,7 @@ class TestScopeGuardTier2b(RepoCase):
         need("scope-guard.sh")
         self.start_run()
         self.manifest("src/app.py")
-        for rel in (".context/CLAUDE.md", ".context/SPEC.md", ".context/MILESTONES.md"):
+        for rel in (".claude/doctrine/CLAUDE.md", ".context/SPEC.md", ".context/MILESTONES.md"):
             write(self.tmp / rel, "# doc\n")
             with self.subTest(path=rel):
                 self.assertTrue(self.scope_blocked(self.tmp / rel), rel)
@@ -2244,8 +2247,8 @@ class TestAttributionOnlyBlamesTheActor(GateCase):
 
     def test_negative_tier_2b_paths_are_never_attributed_to_an_agent(self):
         self.start_run()
-        self.dirty(".context/CLAUDE.md", ".claude/hooks/guard.sh")
-        for p in (".context/CLAUDE.md", ".claude/hooks/guard.sh"):
+        self.dirty(".claude/doctrine/CLAUDE.md", ".claude/hooks/guard.sh")
+        for p in (".claude/doctrine/CLAUDE.md", ".claude/hooks/guard.sh"):
             with self.subTest(path=p):
                 self.assertEqual(
                     self.attributable(p).rc,
@@ -3992,7 +3995,26 @@ def _method(test):
     return getattr(type(test), test._testMethodName, None)
 
 
-def build_suite(smoke_only=False, pattern=None):
+# The QUICK tier: what an install must prove before you trust a refusal.
+# Every class here is either a security wall or a meta-invariant that catches a
+# botched install. It is NOT the whole suite -- run the full one once, and after
+# any change to the control layer. Chosen to stay near half a minute, because a
+# scaffolding step nobody waits for is a scaffolding step people skip.
+QUICK_CLASSES = (
+    "TestEveryGuardRuleIdIsClassified",   # an unclassified rule is a silent wall
+    "TestDenyPartitionIsConsistent",      # settings deny vs ESC_NEVER agree
+    "TestLawsAreIdenticalEverywhere",     # the 12 law copies have not drifted
+    "TestNoProjectNounsLeak",             # the harness is actually generic
+    "TestBashIsResolvedByProbe",          # the interpreter this host will use
+    "TestWriteEffectBeatsReadCarveOut",   # cat x > guard.sh is a WRITE
+    "TestGuardProtectsSecrets",           # secrets are unreachable
+    "TestShipFlowIsTwoFactor",            # nothing reaches the base branch alone
+    "TestScopeGuardTier2b",               # human-owned files stay human-owned
+    "TestApprovalCannotBeReused",         # single-use, byte-exact, run-bound
+)
+
+
+def build_suite(smoke_only=False, pattern=None, quick_only=False):
     loader = unittest.TestLoader()
     loader.sortTestMethodsUsing = None  # keep declaration order; setUp cost dominates
     raw = list(_flatten(loader.loadTestsFromModule(sys.modules[__name__])))
@@ -4004,6 +4026,8 @@ def build_suite(smoke_only=False, pattern=None):
             continue  # module-level aliases must not double-run
         seen.add(tid)
         if smoke_only and not getattr(_method(t), "__smoke__", False):
+            continue
+        if quick_only and type(t).__name__ not in QUICK_CLASSES:
             continue
         if pattern and pattern.lower() not in tid.lower():
             continue
@@ -4141,17 +4165,25 @@ def main(argv=None):
     want_json = "--json" in argv
     want_list = "--list" in argv
     smoke_only = "--smoke" in argv
+    quick_only = "--quick" in argv
     verbose = "-v" in argv or "--verbose" in argv
     pattern = None
     if "-k" in argv:
         i = argv.index("-k")
         if i + 1 < len(argv):
             pattern = argv[i + 1]
+    else:
+        # A bare positional (a class or test name) filters, rather than being
+        # ignored while the whole suite runs anyway.
+        for a in argv:
+            if not a.startswith("-"):
+                pattern = a
+                break
     if "--help" in argv or "-h" in argv:
         sys.stdout.write(__doc__ or "")
         return 0
 
-    suite = build_suite(smoke_only=smoke_only, pattern=pattern)
+    suite = build_suite(smoke_only=smoke_only, pattern=pattern, quick_only=quick_only)
 
     if want_list:
         for t in _flatten(suite):
@@ -4169,7 +4201,7 @@ def main(argv=None):
     if want_json:
         payload = {
             "harness": "ratchet",
-            "mode": "smoke" if smoke_only else "full",
+            "mode": "smoke" if smoke_only else ("quick" if quick_only else "full"),
             "total": result.testsRun,
             "passed": sum(1 for r in result.records if r["status"] == "pass"),
             "failed": sum(1 for r in result.records if r["status"] == "fail"),
@@ -4185,7 +4217,7 @@ def main(argv=None):
             "\nratchet self-test [%s]: %d run, %d passed, %d failed, %d errors, "
             "%d skipped in %ss\n"
             % (
-                "smoke" if smoke_only else "full",
+                "smoke" if smoke_only else ("quick" if quick_only else "full"),
                 result.testsRun,
                 sum(1 for r in result.records if r["status"] == "pass"),
                 len(result.failures),

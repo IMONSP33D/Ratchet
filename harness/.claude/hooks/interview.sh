@@ -79,9 +79,9 @@ if [ -f "$OUT" ]; then
 fi
 
 # Harness-wide defaults for the "you almost certainly want these" answers.
-: "${GOVERNING_CORPUS:=.context/CLAUDE.md
-.context/PIPELINE.md
-.context/TEMPLATE.md
+: "${GOVERNING_CORPUS:=.claude/doctrine/CLAUDE.md
+.claude/doctrine/PIPELINE.md
+.claude/doctrine/TEMPLATE.md
 .context/SPEC.md
 .context/MILESTONES.md
 CLAUDE.md}"
@@ -266,9 +266,10 @@ ask_list BANNED_READ_FILES \
      Examples: .context/archive/old-full-spec.md"
 
 ask_list GOVERNING_CORPUS \
-"     Governing corpus — human-owned documents the agent may never edit.
-     The five .context/ documents plus root CLAUDE.md are the default; add any
-     other doc that is a contract rather than a note."
+"     Governing corpus — contract documents the agent may never edit.
+     The default is the three .claude/doctrine/ documents, .context/SPEC.md,
+     .context/MILESTONES.md and root CLAUDE.md; add any other doc that is a
+     contract rather than a note."
 
 # 8 -------------------------------------------------------------------------
 ask_list DOMAIN_NEVER_ESCALATABLE \

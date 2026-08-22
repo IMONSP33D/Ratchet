@@ -191,7 +191,7 @@ claude
 Paste this, exactly:
 
 ```
-Read .context/CLAUDE.md, .context/SPEC.md and .context/MILESTONES.md.
+Read .claude/doctrine/CLAUDE.md, .context/SPEC.md and .context/MILESTONES.md.
 Confirm you understand the four-directory ownership partition and the two
 human stop points, then run milestone M0.
 ```
@@ -200,7 +200,7 @@ If you would rather see the machinery before spending a real run on it, paste
 this instead — it is the cheapest possible dress rehearsal:
 
 ```
-Read .context/CLAUDE.md and .context/MILESTONES.md. Do not start a run.
+Read .claude/doctrine/CLAUDE.md and .context/MILESTONES.md. Do not start a run.
 Propose an M0 with exactly two WIN rows for this repo, write it into
 .context/MILESTONES.md as a suggestion in your reply only, and stop.
 ```

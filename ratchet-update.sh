@@ -79,7 +79,7 @@
 #
 # $TARGET/.claude/.backup-<version>-<timestamp>/
 #     claude/    a copy of the whole .claude/ tree minus other .backup-* dirs
-#     context/   copies of the doctrine docs this update would rewrite
+#     context/   copies of any doctrine doc still living outside .claude/ (legacy)
 #     root/      CLAUDE.ratchet.md, if present
 #     install.log  the delegated install.sh transcript
 #     restore.sh   the one-command rollback. Generated per backup; it names the
@@ -268,10 +268,9 @@ rtu_classify() {
     .claude/agents/*.md)                  printf 'HARNESS'; return 0 ;;
     # Doctrine docs. They ship from the harness, they carry no project content
     # of their own, and they are the only channel by which a doctrine change
-    # reaches an existing project. install.sh writes them if-absent, which is
-    # right for an install and wrong for an update.
-    .context/CLAUDE.md|.context/PIPELINE.md|.context/TEMPLATE.md|.context/UPGRADING.md)
-                                          printf 'HARNESS'; return 0 ;;
+    # reaches an existing project. They live under .claude/ because that is the
+    # harness-owned control layer; .context/ holds only the human's contracts.
+    .claude/doctrine/*.md)                printf 'HARNESS'; return 0 ;;
     CLAUDE.ratchet.md)                    printf 'HARNESS'; return 0 ;;
 
     # ---- USER: the project's own work -------------------------------------
@@ -289,7 +288,7 @@ rtu_classify() {
 }
 
 # The HARNESS doctrine docs, listed once so the copier and the reporter agree.
-DOCTRINE_DOCS=".context/CLAUDE.md .context/PIPELINE.md .context/TEMPLATE.md .context/UPGRADING.md"
+DOCTRINE_DOCS=".claude/doctrine/CLAUDE.md .claude/doctrine/PIPELINE.md .claude/doctrine/TEMPLATE.md .claude/doctrine/UPGRADING.md"
 
 # The never-escalatable control set (CONTRACT §5.6). Drift here is reported at a
 # higher volume than drift anywhere else, because nothing lifts these rules and
@@ -597,7 +596,7 @@ rtu_bundle_harness_paths() {
     [ -f "$HARNESS_SRC/$doc" ] && printf '%s\n' "$doc"
   done
   # CLAUDE.ratchet.md is only a thing when the project has its own root CLAUDE.md.
-  if [ -f "$TARGET/CLAUDE.ratchet.md" ] && [ -f "$HARNESS_SRC/.context/CLAUDE.md" ]; then
+  if [ -f "$TARGET/CLAUDE.ratchet.md" ] && [ -f "$HARNESS_SRC/.claude/doctrine/CLAUDE.md" ]; then
     printf '%s\n' "CLAUDE.ratchet.md"
   fi
   return 0
@@ -679,14 +678,14 @@ while IFS= read -r rel; do
   [ -n "$rel" ] || continue
   src="$HARNESS_SRC/$rel"
   case "$rel" in
-    .context/*)        src="$HARNESS_SRC/$rel" ;;
-    CLAUDE.ratchet.md) src="$HARNESS_SRC/.context/CLAUDE.md" ;;
+    .claude/doctrine/*) src="$HARNESS_SRC/$rel" ;;
+    CLAUDE.ratchet.md)  src="$HARNESS_SRC/.claude/doctrine/CLAUDE.md" ;;
   esac
   dst="$TARGET/$rel"
   if [ ! -f "$dst" ]; then
     printf 'NEW\tHARNESS\t%s\tnot installed here yet\n' "$rel" >> "$ROWS"
     N_NEW=$((N_NEW+1))
-    case "$rel" in .context/*|CLAUDE.ratchet.md) printf '%s\n' "$rel" >> "$DOCTRINE_TOUCH" ;; esac
+    case "$rel" in .claude/doctrine/*|CLAUDE.ratchet.md) printf '%s\n' "$rel" >> "$DOCTRINE_TOUCH" ;; esac
     continue
   fi
   # Local modification is decided against the RECORDED checksum, never against
@@ -739,7 +738,7 @@ while IFS= read -r rel; do
       N_UPDATE=$((N_UPDATE+1))
       ;;
   esac
-  case "$rel" in .context/*|CLAUDE.ratchet.md) printf '%s\n' "$rel" >> "$DOCTRINE_TOUCH" ;; esac
+  case "$rel" in .claude/doctrine/*|CLAUDE.ratchet.md) printf '%s\n' "$rel" >> "$DOCTRINE_TOUCH" ;; esac
 done < "$WORK/bundle-paths"
 
 # --- ORPHANS: harness files we installed that the new bundle no longer ships -
@@ -982,7 +981,7 @@ ROLLBACK="bash $BK_REL/restore.sh"
 if [ "$DRY_RUN" = "1" ]; then
   head1 "Backup (dry run)"
   info "DRY: would copy .claude/ (minus other .backup-*) to $BK_REL/claude/"
-  info "DRY: would copy the doctrine docs it rewrites to $BK_REL/context/"
+  info "DRY: the doctrine docs it rewrites ride along in that .claude/ copy"
   info "DRY: would generate $BK_REL/restore.sh"
 else
   head1 "Backup"
@@ -1001,12 +1000,12 @@ else
   ok "backed up .claude/ -> $BK_REL/claude/ ($BK_N files)"
 
   if [ -s "$DOCTRINE_TOUCH" ]; then
-    mkdir -p "$BK/context" 2>/dev/null
     while IFS= read -r rel; do
       [ -f "$TARGET/$rel" ] || continue
       case "$rel" in
         CLAUDE.ratchet.md) mkdir -p "$BK/root" 2>/dev/null; cp -f "$TARGET/$rel" "$BK/root/" 2>/dev/null ;;
-        *)                 cp -f "$TARGET/$rel" "$BK/context/" 2>/dev/null ;;
+        .claude/*)         : ;;   # already inside the whole-.claude/ copy taken above
+        *)                 mkdir -p "$BK/context" 2>/dev/null; cp -f "$TARGET/$rel" "$BK/context/" 2>/dev/null ;;
       esac
     done < "$DOCTRINE_TOUCH"
     ok "backed up the doctrine docs this update rewrites"
@@ -1024,7 +1023,7 @@ else
 # immediately before the update to $BUNDLE_VERSION.
 #
 # It restores:   .claude/hooks/  .claude/agents/  .claude/settings.json
-#                the .claude/ dotfiles, and the doctrine docs under .context/
+#                the .claude/ dotfiles, and the doctrine docs under .claude/doctrine/
 # It does NOT touch: .pipeline/  .agent-development/  secrets/  docs/evidence/
 #                .context/SPEC.md  MILESTONES.md  DECISIONS.md  your CLAUDE.md
 # Nothing in that second list was modified by the update, so restoring it would
@@ -1036,7 +1035,7 @@ BK="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || exit 2
 R="\$(cd "\$BK/../.." 2>/dev/null && pwd)" || exit 2
 [ -d "\$BK/claude" ] || { printf 'rollback: backup payload missing at %s\n' "\$BK/claude" >&2; exit 2; }
 printf 'Rolling %s back to Ratchet $INSTALLED_VERSION ...\n' "\$R"
-rm -rf "\$R/.claude/hooks" "\$R/.claude/agents"
+rm -rf "\$R/.claude/hooks" "\$R/.claude/agents" "\$R/.claude/doctrine"
 rm -f  "\$R/.claude/settings.json" "\$R/.claude/.ratchet-version" \\
        "\$R/.claude/.ratchet-manifest" "\$R/.claude/.ratchet-install-manifest" \\
        "\$R/.claude/.ratchet-install.json"
@@ -1061,14 +1060,15 @@ fi
 # ============================================================================
 head1 "Applying"
 
-# --- 13.1 doctrine docs. install.sh writes .context/ if-absent, which is right
-# for an install and wrong for an update, so the updater places these itself and
-# lets install.sh's substitution pass fill the {{MARKERS}} afterwards.
+# --- 13.1 doctrine docs. install.sh replaces .claude/doctrine/ wholesale, the
+# same way it replaces the hooks; the updater still places them here first so
+# CLAUDE.ratchet.md is covered too, and lets install.sh's substitution pass fill
+# the {{MARKERS}} afterwards.
 if [ -s "$DOCTRINE_TOUCH" ]; then
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     case "$rel" in
-      CLAUDE.ratchet.md) src="$HARNESS_SRC/.context/CLAUDE.md" ;;
+      CLAUDE.ratchet.md) src="$HARNESS_SRC/.claude/doctrine/CLAUDE.md" ;;
       *)                 src="$HARNESS_SRC/$rel" ;;
     esac
     [ -f "$src" ] || continue
@@ -1152,20 +1152,20 @@ if [ "$DRY_RUN" != "1" ] && [ -f "$BK/claude/settings.json" ] && [ -f "$TARGET/.
     say "        Our deny beats your allow and your ask. If one of these is load-bearing"
     say "        for this project, it does not go back in settings.json by hand: it is a"
     say "        domain-pack question (SECRET_EXEMPTIONS, FORBIDDEN_EXEC_TOKENS) or a"
-    say "        named local patch. See .context/UPGRADING.md section 5."
+    say "        named local patch. See .claude/doctrine/UPGRADING.md section 5."
   fi
 fi
 
 # --- CLAUDE.ratchet.md, which install.sh writes on every re-run -------------
 # install.sh's first run writes a root CLAUDE.md containing the one-line import
-# `@.context/CLAUDE.md`. Every run after that sees a root CLAUDE.md, concludes
+# `@.claude/doctrine/CLAUDE.md`. Every run after that sees a root CLAUDE.md, concludes
 # the project had its own, and writes CLAUDE.ratchet.md plus a warning saying
 # the doctrine is "installed but not loaded" -- which is false when the import
 # is already there. Say so, once, rather than let the warning stand.
 if [ "$DRY_RUN" != "1" ] && [ -f "$TARGET/CLAUDE.ratchet.md" ] \
-   && grep -q '@\.context/CLAUDE\.md' "$TARGET/CLAUDE.md" 2>/dev/null; then
+   && grep -q '@\.claude/doctrine/CLAUDE\.md' "$TARGET/CLAUDE.md" 2>/dev/null; then
   info "CLAUDE.ratchet.md was (re)written by install.sh, but your root CLAUDE.md"
-  info "  already imports @.context/CLAUDE.md, so the doctrine IS loaded and that"
+  info "  already imports @.claude/doctrine/CLAUDE.md, so the doctrine IS loaded and that"
   info "  file is a redundant copy. Deleting it is safe and this updater will not"
   info "  put it back unless install.sh does."
 fi
@@ -1185,8 +1185,8 @@ if [ -s "$MODIFIED_LIST" ] && [ "$FORCE_OVERWRITE" != "1" ]; then
     # tree has been rewritten and marker-substituted.
     case "$rel" in
       CLAUDE.ratchet.md) srcbk="$BK/root/CLAUDE.ratchet.md" ;;
-      .context/*)        srcbk="$BK/context/$(basename "$rel")" ;;
       .claude/*)         srcbk="$BK/claude/${rel#.claude/}" ;;
+      .context/*)        srcbk="$BK/context/$(basename "$rel")" ;;
       *)                 srcbk="" ;;
     esac
     if [ -n "$srcbk" ] && [ -f "$srcbk" ]; then
@@ -1203,7 +1203,7 @@ if [ -s "$MODIFIED_LIST" ] && [ "$FORCE_OVERWRITE" != "1" ]; then
     FIRST_LOCAL="$(head -1 "$LOCAL_SAVED")"
     say "      diff \"${FIRST_LOCAL%.local-$TS}\" \"$FIRST_LOCAL\""
     say "  If the edit is still wanted, it does not go back in by hand: it goes"
-    say "  upstream, or it becomes a named local patch. See .context/UPGRADING.md."
+    say "  upstream, or it becomes a named local patch. See .claude/doctrine/UPGRADING.md."
   fi
 fi
 
@@ -1259,7 +1259,7 @@ fi
 if [ -s "$CONTROL_DRIFT" ]; then
   CL="$(tr '\n' ' ' < "$CONTROL_DRIFT" | sed 's/ *$//')"
   rtu_file_action "control-set-drift-detected" \
-"Before this update, these never-escalatable control-set files did not match what was installed: \`$CL\`. They have been replaced with harness $BUNDLE_VERSION and the previous contents kept as \`.local-$TS\`. Read the diff and decide whether the edit was a deliberate local patch (record it in DECISIONS.md and see \`.context/UPGRADING.md\`), or drift that should stay gone." >/dev/null
+"Before this update, these never-escalatable control-set files did not match what was installed: \`$CL\`. They have been replaced with harness $BUNDLE_VERSION and the previous contents kept as \`.local-$TS\`. Read the diff and decide whether the edit was a deliberate local patch (record it in DECISIONS.md and see \`.claude/doctrine/UPGRADING.md\`), or drift that should stay gone." >/dev/null
 elif [ -s "$MODIFIED_LIST" ]; then
   ML="$(tr '\n' ' ' < "$MODIFIED_LIST" | sed 's/ *$//')"
   rtu_file_action "harness-files-locally-modified" \
@@ -1420,7 +1420,7 @@ fi
 
 head1 "FIRST SESSION AFTER AN UPDATE"
 say ""
-say "  Read .context/UPGRADING.md -- it is the doctrine for this, and the update"
+say "  Read .claude/doctrine/UPGRADING.md -- it is the doctrine for this, and the update"
 say "  may have just rewritten it. The short version:"
 say "    1. Re-read .agent-development/ACTIVE-LESSONS.md; a lesson can be obsoleted"
 say "       by a scaffold change and a stale lesson costs tokens every run."
