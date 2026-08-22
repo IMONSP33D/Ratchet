@@ -369,7 +369,7 @@ your-repo/
     settings.json            merged permission surface + hook wiring
     agents/                  12 seat definitions + _LAWS.md
     hooks/                   guards, gates, config, stack packs, the test suite
-  .context/                  YOUR contracts: SPEC, MILESTONES, PIPELINE, CLAUDE, DECISIONS
+  .context/                  YOUR contracts: SPEC, MILESTONES, DECISIONS (exactly three)
   .pipeline/                 run scratch; runtime gitignored, the record tracked
   .agent-development/        run retros, ACTIVE-LESSONS.md, PENDING-HUMAN-ACTIONS.md
   docs/evidence/             WIN-row proof, probe transcripts

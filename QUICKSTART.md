@@ -100,9 +100,13 @@ as a string instead of as your test command.
 
 ## Step 3 — Fill `SPEC.md` (2 minutes for the first pass)
 
-Open `.context/SPEC.md`. It is a stub with the shape you need and worked
-examples in every section. **You do not have to finish it now.** For a first
-run you need three things:
+Open `.context/SPEC.md`. It ships as an unwritten placeholder (`<!-- ratchet:unwritten -->`) —
+there is nothing to trim, because nothing is guessed for you; every gate that reads it reports
+"not written yet" until you write it. Read `.claude/doctrine/TEMPLATE.md` for the section shape
+and the requirement-id taxonomy, or have Claude draft from it and interview you for the details —
+that single pre-run drafting pass is the one case an agent may write this file, and its output is
+handed to you to correct. **You do not have to finish it now.** For a first run you need three
+things:
 
 1. **Purpose, scope, non-goals** — one paragraph each. The non-goals paragraph is
    the one people skip and the one that stops scope creep three milestones later.
@@ -118,7 +122,8 @@ run you need three things:
      source. Every such value resolves through the config loader.
    ```
 
-3. Delete the worked examples you did not use, and leave the headings.
+3. Follow `TEMPLATE.md`'s section headings for the rest; leave a section as a stub with a
+   `TODO(human)` marker rather than inventing content to fill it.
 
 That is enough. `SPEC.md` grows one milestone at a time; a spec written in one
 sitting is a spec written before you knew anything.
@@ -130,9 +135,10 @@ sitting is a spec written before you knew anything.
 This is the step that decides whether your first run is a pleasure or a
 disaster, and it is entirely mechanical.
 
-Open `.context/MILESTONES.md`. It ships with a seven-row worked M0. **Cut it
-down to two rows for your first run.** Two is enough to see every gate fire, and
-short enough that a failure is obvious rather than ambiguous.
+Open `.context/MILESTONES.md`. It ships as an unwritten placeholder, same as `SPEC.md` — until
+it is written the WIN-rows gate FAILS with that instruction rather than passing vacuously. Write
+**two WIN rows for your first M0, not more.** Two is enough to see every gate fire, and short
+enough that a failure is obvious rather than ambiguous.
 
 ```markdown
 # M0 — Configuration spine

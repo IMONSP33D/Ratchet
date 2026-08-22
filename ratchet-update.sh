@@ -838,6 +838,23 @@ if [ -s "$MODIFIED_LIST" ]; then
   done < "$MODIFIED_LIST"
 fi
 
+# --- stale pre-1.2.0 .context/ doctrine copies ------------------------------
+# .context/ holds exactly three contracts (CONTRACT.md 1). A pre-1.2.0 build
+# also shipped CLAUDE.md/CONVENTIONS.md/PIPELINE.md/TEMPLATE.md/UPGRADING.md
+# there; rtu_classify's default (USER) means this updater never touches them,
+# so a project installed from that build keeps them forever, diverging
+# further from the live doctrine in .claude/doctrine/ every release. Detected
+# and reported, never auto-removed --- .context/ is the human's, and this
+# updater does not delete USER files.
+STALE_CONTEXT_DOCTRINE="$WORK/stale-context-doctrine"; : > "$STALE_CONTEXT_DOCTRINE"
+for stale in CLAUDE.md CONVENTIONS.md PIPELINE.md TEMPLATE.md UPGRADING.md; do
+  [ -f "$TARGET/.context/$stale" ] && printf '%s\n' "$stale" >> "$STALE_CONTEXT_DOCTRINE"
+done
+LEGACY_CONTEXT_IMPORT=0
+if [ -f "$TARGET/CLAUDE.md" ] && grep -q '@\.context/CLAUDE\.md' "$TARGET/CLAUDE.md" 2>/dev/null; then
+  LEGACY_CONTEXT_IMPORT=1
+fi
+
 # ============================================================================
 # SECTION 9 — THE REPORT
 # ============================================================================
@@ -913,6 +930,30 @@ if [ -s "$NEVER_GONE" ]; then
   say "  These were walls and are not any more. Read them as a loosening:"
   say ""
   sed 's/^/      /' "$NEVER_GONE"
+fi
+
+if [ -s "$STALE_CONTEXT_DOCTRINE" ] || [ "$LEGACY_CONTEXT_IMPORT" = "1" ]; then
+  head1 "STALE .context/ DOCTRINE COPIES"
+  if [ -s "$STALE_CONTEXT_DOCTRINE" ]; then
+    printf '  %sThese files under .context/ are pre-1.2.0 doctrine, not one of the three\n' "$C_Y"
+    printf '  contracts (SPEC/MILESTONES/DECISIONS). They differ from --- and can\n'
+    printf '  contradict --- the live doctrine at .claude/doctrine/, and this updater\n'
+    printf '  classifies an unrecognised .context/ path as USER, so it has never\n'
+    printf '  touched them and will not delete them now:%s\n\n' "$C_0"
+    sed 's/^/      .context\//' "$STALE_CONTEXT_DOCTRINE"
+    say ""
+    say "  Safe to remove by hand once you have confirmed nothing of yours cites"
+    say "  them; the doctrine they duplicate lives on at .claude/doctrine/."
+  fi
+  if [ "$LEGACY_CONTEXT_IMPORT" = "1" ]; then
+    say ""
+    warn "root CLAUDE.md still imports .context/CLAUDE.md (the pre-1.2.0 chain)."
+    say "        Every session in this project loads the STALE copy above instead of"
+    say "        .claude/doctrine/CLAUDE.md. Root CLAUDE.md is USER-owned and this"
+    say "        updater will not rewrite it for you; change that import line to"
+    say "        '@.claude/doctrine/CLAUDE.md' by hand -- the same line a fresh"
+    say "        install writes."
+  fi
 fi
 
 if [ -s "$CFG_CHANGED" ]; then

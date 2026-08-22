@@ -1132,12 +1132,20 @@ copy_tree ".claude/doctrine"    replace
 
 # ------------------------------------------------------------- 5.3 context --
 # Human-owned. Written ONLY when absent -- an upgrade must never rewrite a SPEC.
-# .context/ holds exactly three contracts: SPEC.md, MILESTONES.md, DECISIONS.md.
-# The doctrine that used to sit beside them now lives in .claude/doctrine/.
+# .context/ holds exactly three contracts: SPEC.md, MILESTONES.md, DECISIONS.md
+# (CONTRACT.md 1). The doctrine that used to sit beside them now lives in
+# .claude/doctrine/ -- an ALLOWLIST, not a glob: a stale pre-1.2.0 build of the
+# harness source shipped CLAUDE.md/CONVENTIONS.md/PIPELINE.md/TEMPLATE.md/
+# UPGRADING.md here too, and a glob-based copy put them in every fresh
+# install, if-absent, where the updater's HARNESS/USER classifier (which only
+# knows SPEC/MILESTONES/DECISIONS as USER) then protected them as USER files
+# forever -- never refreshed, never flagged, silently contradicting the real
+# doctrine on the very same read path. Extend this list only by editing
+# CONTRACT.md 1 first.
 rt_sub "Human-owned contracts (.context/)"
-for f in "$HARNESS_DIR/.context"/*; do
-  [ -f "$f" ] || continue
-  base="$(basename "$f")"
+for base in SPEC.md MILESTONES.md DECISIONS.md; do
+  f="$HARNESS_DIR/.context/$base"
+  [ -f "$f" ] || { warn ".context/$base missing from the harness source (fail closed on install)"; continue; }
   if [ -f "$TARGET/.context/$base" ]; then
     info "kept existing .context/$base (yours; not overwritten)"
   else
@@ -1154,17 +1162,26 @@ done
 CLAUDE_CONFLICT=0
 if [ -f "$HARNESS_DIR/.claude/doctrine/CLAUDE.md" ]; then
   if [ -f "$TARGET/CLAUDE.md" ]; then
-    CLAUDE_CONFLICT=1
-    copy_file "$HARNESS_DIR/.claude/doctrine/CLAUDE.md" "CLAUDE.ratchet.md" replace \
-      && warn "you already have a root CLAUDE.md. It was NOT touched."
-    say "        Ratchet's operating manual was written to CLAUDE.ratchet.md instead."
-    say "        Claude Code reads root CLAUDE.md automatically and does NOT read"
-    say "        CLAUDE.ratchet.md, so until you act, the harness's doctrine is"
-    say "        installed but not loaded. Do ONE of these:"
-    say "          (a) add this line to your CLAUDE.md:   @.claude/doctrine/CLAUDE.md"
-    say "          (b) merge CLAUDE.ratchet.md into your CLAUDE.md by hand"
-    say "        (a) is what we recommend: it keeps the two files separately"
-    say "        upgradeable, and .claude/doctrine/CLAUDE.md is the file Ratchet updates."
+    # A root CLAUDE.md that already carries the import is not a conflict --
+    # it is what THIS installer writes on a fresh install (below), so every
+    # re-run/update used to hit this branch and print a false "installed but
+    # not loaded" warning even for a pristine install. Only a root CLAUDE.md
+    # that does NOT import the doctrine is a real conflict.
+    if grep -q '@\.claude/doctrine/CLAUDE\.md' "$TARGET/CLAUDE.md" 2>/dev/null; then
+      ok "CLAUDE.md already imports .claude/doctrine/CLAUDE.md -- doctrine is loaded"
+    else
+      CLAUDE_CONFLICT=1
+      copy_file "$HARNESS_DIR/.claude/doctrine/CLAUDE.md" "CLAUDE.ratchet.md" replace \
+        && warn "you already have a root CLAUDE.md. It was NOT touched."
+      say "        Ratchet's operating manual was written to CLAUDE.ratchet.md instead."
+      say "        Claude Code reads root CLAUDE.md automatically and does NOT read"
+      say "        CLAUDE.ratchet.md, so until you act, the harness's doctrine is"
+      say "        installed but not loaded. Do ONE of these:"
+      say "          (a) add this line to your CLAUDE.md:   @.claude/doctrine/CLAUDE.md"
+      say "          (b) merge CLAUDE.ratchet.md into your CLAUDE.md by hand"
+      say "        (a) is what we recommend: it keeps the two files separately"
+      say "        upgradeable, and .claude/doctrine/CLAUDE.md is the file Ratchet updates."
+    fi
   else
     if [ "$DRY_RUN" != "1" ]; then
       printf '@.claude/doctrine/CLAUDE.md\n' > "$TARGET/CLAUDE.md" && record "F CLAUDE.md"
