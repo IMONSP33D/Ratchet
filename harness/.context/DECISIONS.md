@@ -11,56 +11,19 @@ agent.
 
 ---
 
-## The hot/cold split
+## Rules — full text lives in `.claude/doctrine/CLAUDE.md` § "The decision log is two files"
 
-| | Hot file (this file) | Cold archive |
-|---|---|---|
-| Path | `.context/DECISIONS.md` | `.context/archive/decisions/DEC-nnn-full.md` |
-| Holds | The template block below: the decision, stated so it can be checked | The full story — reasoning, alternatives, probe output, what it replaced |
-| Caps | soft **250 lines**, hard **300 lines** | none; tracked and kept forever |
-| Pruned | at rollover, to a one-line stub pointing at the archive | never |
+That section is loaded into every session already (it is CLAUDE.md's own import chain, not an optional
+read), so it is the one home for the hot/cold split, the caps (`DECISIONS_HOT_SOFT_LINES=250`,
+`DECISIONS_HOT_HARD_LINES=300`), what must never go in this file, id/name rules, the entry template,
+and rollover triggers. Restating them here duplicated ~55 lines read by every agent on every run for no
+reader who didn't already have them — this file paid that cost and CLAUDE.md a second time, forever.
+Fixed by the audit that also found the pattern in R1/R2 (a reader and a writer that drifted because two
+copies existed to drift from). If the two ever disagree, CLAUDE.md wins and this note is the finding.
 
-**Appending a decision must never be the failing action.** Over the hard cap the checker emits
-`ROLLOVER-REQUIRED` and the guard still permits the append. A harness that punishes you for recording
-a decision teaches you not to record decisions.
-
-**Rollover** triggers on: the hot file passing the soft cap · a milestone merging · a fifth-run
-consolidation. It is `retro`'s step, proposed to the human — `.context/` is Tier 2b.
-
-## What must never go in this file
-
-Probe tables · pasted command output · review-board essays · WIN-row tables · anything longer than the
-Decision field. Those belong in the archive body, `.agent-development/runs/`, `.pipeline/findings.md`,
-or — when a human has to *do* something — `.agent-development/PENDING-HUMAN-ACTIONS.md`. A to-do
-recorded as a decision is both a bloated log and a task nobody tracks.
-
-## Ids and names
-
-Every decision carries **both**: `DEC-nnn · <name>`. The number is the sort key and the archive
-filename; the name is what humans read and cite. Names are kebab-case, 2–5 words, state the problem,
-and are unique across findings, lessons, pending actions and decisions (`TEMPLATE.md` §7).
-
-**Ids are permanent and never reused.** A decision that replaces an older one gets a NEW id and name
-plus a `Supersedes.` line; the old id keeps resolving forever, because a citation that resolves to
-nothing still reads as though it resolves.
-
-## Entry template — use this and nothing else
-
-```
-## DEC-nnn · <name>
-**Date.** YYYY-MM-DD · **Status.** ACTIVE | SUPERSEDED by DEC-mmm
-**Decision.** <=120 words, stated so it can be checked.
-**Default/config.** <key = value>                (omit if none)
-**Supersedes.** DEC-nnn · <name>                 (omit if none)
-**Affected.** REQ-… SEC-… AV-… WIN-…
-**Simulated.** Simulated against <n> frozen rows; <k> changed meaning: <list>
-**Archive.** .context/archive/decisions/DEC-nnn-full.md
-```
-
-**The `Simulated.` line is mandatory and is not a formality.** When a decision touches a frozen test
-surface, a refusal rule, or a platform branch, enumerate the frozen rows it touches, replay each
-against the ruling, and record the result. An entry without this line has not been adjudicated, only
-asserted. `Simulated against <n>; none changed.` is a valid and common answer.
+**One rule repeated here because getting it wrong corrupts the log, not just the prose:** every new
+entry uses `## DEC-nnn · <name>` and the exact field order CLAUDE.md gives — copy the block from there
+rather than the previous entry below, which may itself be a placeholder.
 
 ---
 

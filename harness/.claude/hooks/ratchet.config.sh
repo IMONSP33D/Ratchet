@@ -122,6 +122,11 @@ CAP_CLEAR_VERDICT="${CAP_CLEAR_VERDICT:-200}"
 CAP_RECAP_WORDS="${CAP_RECAP_WORDS:-400}"
 CAP_RETRO_LINES="${CAP_RETRO_LINES:-220}"
 CAP_ACTIVE_LESSONS_LINES="${CAP_ACTIVE_LESSONS_LINES:-100}"
+# session-start.sh's own injection backstop, matching the 150-line threshold
+# PIPELINE.md's garbage-collection table already uses to trigger gc-prune.sh
+# rewriting context-live.md. That trigger keeps the FILE short; this cap
+# keeps the INJECTION short even in the gap before the next prune fires.
+CAP_CONTEXT_LIVE_LINES="${CAP_CONTEXT_LIVE_LINES:-150}"
 DECISIONS_HOT_SOFT_LINES="${DECISIONS_HOT_SOFT_LINES:-250}"
 DECISIONS_HOT_HARD_LINES="${DECISIONS_HOT_HARD_LINES:-300}"
 

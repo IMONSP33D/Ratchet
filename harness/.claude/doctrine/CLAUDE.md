@@ -20,10 +20,20 @@ Read order (imports):
 - Engineering law & contracts: @../../.context/SPEC.md — requirement IDs (REQ/SEC/TEST/INV/AV) are the frozen contract source
 - Build order & win conditions: @../../.context/MILESTONES.md — **the sole source of milestone numbering**
 - Stage mechanics, roles, hooks, preconditions: @PIPELINE.md
-- Structural conventions (ID taxonomy, verify commands, evidence layout, artifact formats): @TEMPLATE.md
 - Decision log (append-only hot file): @../../.context/DECISIONS.md
-- Live pipeline context: @../../.pipeline/context-live.md (injected at SessionStart)
-- **Accumulated process lessons: @../../.agent-development/ACTIVE-LESSONS.md — read at run start, every run**
+
+Deliberately NOT imported here:
+
+- **`TEMPLATE.md`** (structural conventions: ID taxonomy, verify commands, evidence layout, artifact
+  formats) — SPEC.md and MILESTONES.md each already point to it for the one pre-run drafting pass that
+  needs it. Importing 397 lines into every session forever, for a document one pass reads, was the
+  R9 audit finding.
+- **`.pipeline/context-live.md`** and **`.agent-development/ACTIVE-LESSONS.md`** — `session-start.sh`
+  injects both into every session already, each capped (`CAP_CONTEXT_LIVE_LINES`,
+  `CAP_ACTIVE_LESSONS_LINES`). A second `@`-import loaded both TWICE and bypassed the cap on the
+  imported copy — the injected copy was trimmed, the imported one was not, and the cap existed to be
+  defeated. If either is ever missing from a session, that is a `session-start.sh` defect; fix the
+  injection, do not re-add the import.
 
 RFC 2119 keywords apply. `CLAUDE.md`, `SPEC.md`, `MILESTONES.md`, `PIPELINE.md` and `TEMPLATE.md`
 are the governing corpus: never agent-edited — `.context/SPEC.md` and `.context/MILESTONES.md` are the

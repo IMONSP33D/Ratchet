@@ -16,8 +16,13 @@
 # WHAT IT INJECTS, IN ORDER
 #   1. The run banner: milestone, work elapsed vs MAX_RUN_WORK_SECONDS, wall
 #      elapsed vs MAX_RUN_WALL_SECONDS, and whether a run is active at all.
-#   2. $CONTEXT_LIVE verbatim, if present (the orchestrator's working state).
-#   3. $ACTIVE_LESSONS - the only retro artifact any agent reads.
+#   2. $CONTEXT_LIVE, if present, capped at CAP_CONTEXT_LIVE_LINES (the
+#      orchestrator's working state; gc-prune.sh is what keeps the FILE
+#      itself under this size, this cap is the injection's own backstop).
+#   3. $ACTIVE_LESSONS, capped at CAP_ACTIVE_LESSONS_LINES - the only retro
+#      artifact any agent reads. This is the ONLY path either file reaches a
+#      session: doctrine/CLAUDE.md does not @-import them (R9) precisely so
+#      there is one capped copy, not an uncapped second one alongside it.
 #   4. Rows of $PENDING_ACTIONS at recurrence >= 3, OR filed at install (the
 #      three install-time rows are prerequisites, not incidents, and their
 #      recurrence never climbs on its own -- a pure threshold would never
@@ -264,6 +269,17 @@ _webhook_probe() {
   printf 'PASS - webhook configured (https, notify.sh present)'
 }
 
+# _capped_file <path> <cap> - read a file, normalize CRLF, truncate to <cap>
+# lines. Shared by the context-live and active-lessons injections so both go
+# through the SAME cap enforcement instead of each hand-rolling its own
+# `head -n` -- the drift between "capped" and "verbatim" here is exactly the
+# R9 audit finding: an @-import path used to bypass this entirely.
+_capped_file() {
+  local f="$1" cap="$2"
+  [ -r "$f" ] || return 1
+  sed 's/\r$//' "$f" 2>/dev/null | head -n "${cap:-100}"
+}
+
 _smoke_probe() {
   local py="" script out code
   command -v rt_pick_py >/dev/null 2>&1 && py="$(rt_pick_py 2>/dev/null)"
@@ -325,6 +341,17 @@ _selftest() {
   got="$(_json_str 'a
 b')"
   case "$got" in *'\n'*) : ;; *) echo "FAIL json_str newline: $got"; fail=1 ;; esac
+  tmp="$(mktemp 2>/dev/null || echo /tmp/rt-ss-$$)"
+  printf 'one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n' > "$tmp"
+  got="$(_capped_file "$tmp" 3 | wc -l | tr -d ' ')"
+  [ "$got" = "3" ] || { echo "FAIL capped_file did not truncate: $got"; fail=1; }
+  got="$(_capped_file "$tmp" 3 | tail -n 1)"
+  [ "$got" = "three" ] || { echo "FAIL capped_file kept wrong lines or CRLF: [$got]"; fail=1; }
+  got="$(_capped_file "$tmp" 100 | wc -l | tr -d ' ')"
+  [ "$got" = "5" ] || { echo "FAIL capped_file truncated under cap: $got"; fail=1; }
+  got="$(_capped_file /nonexistent/no-such-file 10)"
+  [ -z "$got" ] || { echo "FAIL capped_file on missing file should be empty: [$got]"; fail=1; }
+  rm -f "$tmp" 2>/dev/null
   if [ "$fail" -eq 0 ]; then echo "session-start.sh selftest PASS"; else echo "session-start.sh selftest FAIL"; fi
   return "$fail"
 }
@@ -392,16 +419,12 @@ main() {
 
   local f content
   f="$(_abs "${CONTEXT_LIVE:-.pipeline/context-live.md}")"
-  if [ -r "$f" ]; then
-    content="$(sed 's/\r$//' "$f" 2>/dev/null)"
-    [ -n "$content" ] && { _add "## Live context (${CONTEXT_LIVE:-.pipeline/context-live.md})"; _add ""; _add "$content"; _add ""; }
-  fi
+  content="$(_capped_file "$f" "${CAP_CONTEXT_LIVE_LINES:-150}")"
+  [ -n "$content" ] && { _add "## Live context (${CONTEXT_LIVE:-.pipeline/context-live.md}, capped at ${CAP_CONTEXT_LIVE_LINES:-150} lines)"; _add ""; _add "$content"; _add ""; }
 
   f="$(_abs "${ACTIVE_LESSONS:-.agent-development/ACTIVE-LESSONS.md}")"
-  if [ -r "$f" ]; then
-    content="$(sed 's/\r$//' "$f" 2>/dev/null | head -n "${CAP_ACTIVE_LESSONS_LINES:-100}")"
-    [ -n "$content" ] && { _add "## Active lessons (read at run start, every run)"; _add ""; _add "$content"; _add ""; }
-  fi
+  content="$(_capped_file "$f" "${CAP_ACTIVE_LESSONS_LINES:-100}")"
+  [ -n "$content" ] && { _add "## Active lessons (read at run start, every run)"; _add ""; _add "$content"; _add ""; }
 
   f="$(_abs "${PENDING_ACTIONS:-.agent-development/PENDING-HUMAN-ACTIONS.md}")"
   content="$(_pending_must_print "$f")"
