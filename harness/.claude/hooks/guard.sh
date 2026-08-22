@@ -363,13 +363,31 @@ g_check_all() {
   done <<< "$G_WRITES"
 
   # -- 4. the human-only approver -----------------------------------------------------------------
-  case "$G_TARGET" in
-    *approve.sh*)
-      g_refuse approve-script-invocation \
-        "approve.sh is human-only and is denied to agents at every layer." \
-        "You cannot approve your own request - that is the property that makes a request worth" \
-        "anything. Ask for it on a Decision Card and let a human run it in their own terminal." ;;
-  esac
+  # Detect approve.sh by EFFECT, not by a literal substring. A case variant
+  # (Approve.sh on the case-insensitive mount) or a glob the shell expands to it
+  # (appr*.sh, approv[e].sh) reaches the same human-only script. The literal
+  # substring check is case-folded; then each token whose basename still carries
+  # the `appr` stem is glob-matched against the real name `approve.sh`, so a
+  # wildcard that COULD expand to it is refused while unrelated files
+  # (apprentice.sh, approve-notes.sh) and bare wildcards (*.sh) are not.
+  g_invokes_approve() {
+    case "$G_TARGET_LC" in *approve.sh*) return 0 ;; esac
+    local t b
+    while IFS= read -r t; do
+      [ -n "$t" ] || continue
+      b=$(rt_lc "${t##*/}")
+      case "$b" in *appr*) ;; *) continue ;; esac
+      # shellcheck disable=SC2254
+      case "approve.sh" in $b) return 0 ;; esac
+    done <<< "$G_TOK"
+    return 1
+  }
+  if g_invokes_approve; then
+    g_refuse approve-script-invocation \
+      "approve.sh is human-only and is denied to agents at every layer." \
+      "You cannot approve your own request - that is the property that makes a request worth" \
+      "anything. Ask for it on a Decision Card and let a human run it in their own terminal."
+  fi
 
   # -- 5. git / forge -----------------------------------------------------------------------------
   if g_has_word git || g_has_word gh; then

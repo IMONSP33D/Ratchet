@@ -1492,6 +1492,44 @@ class TestGuardRefusalsAreLegible(RepoCase):
                 self.assertNotEqual(self.guard_run(cmd).returncode, BLOCK, cmd)
 
 
+class TestApproveScriptIsDeniedByEffect(RepoCase):
+    """approve.sh is human-only. A literal-substring, case-sensitive match let a
+    glob or a case variant that resolves to the SAME file slip past the guard --
+    stacking with the Windows case-fold gap, an agent could reach the human-only
+    approver. Detection is by effect now; these are the mismatched payloads."""
+
+    def test_glob_and_case_variants_that_resolve_to_approve_are_refused(self):
+        need("guard.sh")
+        for cmd in (
+            "bash .claude/hooks/approve.sh esc-0000000000000000",
+            "bash .claude/hooks/appr*.sh esc-0000000000000000",
+            "bash .claude/hooks/Approve.sh esc-0000000000000000",
+            "bash .claude/hooks/approv[e].sh esc-0000000000000000",
+        ):
+            with self.subTest(cmd=cmd):
+                r = self.guard_run(cmd)
+                self.assertEqual(r.returncode, BLOCK, "reached approve.sh: %s" % cmd)
+                self.assertIn("approve-script-invocation",
+                              r.stderr + r.stdout, cmd)
+
+    def test_unrelated_files_and_bare_wildcards_are_not_false_positives(self):
+        """The mismatched payload: if 'appr' or a wildcard is enough to refuse,
+        the rule blocks ordinary work. apprentice.sh and approve-notes.sh are
+        different files; *.sh / * do not target approve by name."""
+        need("guard.sh")
+        for cmd in (
+            "bash .claude/hooks/apprentice.sh run",
+            "ls docs/*.py",
+            "grep -r foo .",
+            "cat approve-notes.sh",
+        ):
+            with self.subTest(cmd=cmd):
+                r = self.guard_run(cmd)
+                self.assertNotIn(
+                    "approve-script-invocation", r.stderr + r.stdout,
+                    "false positive on %s" % cmd)
+
+
 # --------------------------------------------------------------------------
 # SCOPE GUARD
 # --------------------------------------------------------------------------
