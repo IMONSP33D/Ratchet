@@ -542,7 +542,9 @@ Efficiency comes from removing recomputation, never from removing rigour. In pri
    consistent. One telling cannot disagree with itself.
 
 9. **Generate what a script can generate, and never hand-maintain its output.**
-   - The retro's mechanical record: `python .claude/hooks/run_metrics.py --markdown`.
+   - The retro's mechanical record: `python .claude/hooks/run_metrics.py --measure-end-state
+     --markdown --out .agent-development/metrics/NNN-<milestone>.json` — the `--out` write is what
+     leaves the permanent sidecar `--trend` reads back; a bare `--markdown` run does not produce one.
    - The WIN-row proof map: `python .claude/hooks/proof_map.py --milestone M<n>` →
      `docs/evidence/M<n>/proof-map.md`. The contract freezes the WIN → *selector* mapping; the test
      names are derived. That deletes the "map narrower than its own selector" defect class by

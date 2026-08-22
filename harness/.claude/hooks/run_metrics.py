@@ -16,13 +16,22 @@
 # PER-RUN SCOPING: every counter is scoped to the CURRENT run token. Events
 # carrying a different token are ignored and reported as `events_other_run`;
 # an existing METRICS_JSON written under a different token is rebuilt from
-# scratch, never merged. A retro must never quote a previous run's numbers.
+# scratch, never merged. A retro must never quote a previous run's numbers
+# AS ITS OWN -- this file will never compute a cross-run delta for a live run.
 #
 # WRITER/READER CONTRACT for METRICS_JSON (this file owns both ends):
 #   {"schema":1,"run":"<token>","milestone":"M<n>","generated_at":"<iso>",
 #    "counters":{"<name>": <int|null>, ...},
 #    "maps":{"<name>": {"<key>": <int>}},
 #    "end_state":{...}|null, "notes":{...}, "contradictions":[{...}]}
+#
+# METRICS SIDECARS ($DEV_DIR/metrics/NNN-<milestone>.json) are a different,
+# permanent thing: one snapshot per retro, written by `--out` pointed there,
+# never pruned. `--trend [N]` reads back N of them (oldest first) for a
+# read-only human-facing "last N runs" table -- the one place a comparison
+# ACROSS runs is allowed, because nothing here claims it as a CURRENT run's
+# own measurement. Writing the sidecar is the retro seat's job (retro.md §2);
+# this file only provides the write target and the read-back.
 #
 # Stdlib only. utf-8 on every open. No project nouns.
 #
@@ -53,7 +62,7 @@ CONFIG_KEYS = [
     "REPO_ROOT", "PIPELINE_DIR", "EVENTS_LOG", "METRICS_JSON", "RUN_ACTIVE",
     "RUN_START", "RUN_IDLE", "RUN_LAST_SEEN", "FINDINGS", "CHECKPOINTS_DIR",
     "BASE_BRANCH", "MAX_REVIEW_ROUNDS", "MAX_RUN_WORK_SECONDS",
-    "MAX_RUN_WALL_SECONDS", "HOOKS_DIR",
+    "MAX_RUN_WALL_SECONDS", "HOOKS_DIR", "DEV_DIR",
 ]
 
 # name -> (event type, optional (kv-key, kv-value) filter, human label)
@@ -616,6 +625,75 @@ def write_metrics(ctx, metrics, out=None):
 
 
 # ---------------------------------------------------------------------------
+# Metrics sidecars ($DEV_DIR/metrics/NNN-<milestone>.json) and --trend
+# ---------------------------------------------------------------------------
+SIDECAR_RE = re.compile(r"^(\d{3})-.+\.json$")
+
+TREND_COLUMNS = [
+    ("escalation_requests", "esc"),
+    ("red_gate_blocks", "red-gate"),
+    ("work_seconds", "work-s"),
+]
+
+
+def sidecar_dir(ctx):
+    dev = ctx.path("DEV_DIR")
+    return os.path.join(dev, "metrics") if dev else None
+
+
+def load_sidecars(ctx, limit=None):
+    """Read $DEV_DIR/metrics/NNN-<milestone>.json, oldest first. Unreadable or
+    non-conforming files are skipped, not fatal -- a broken sidecar must never
+    block the run that would otherwise write the next one."""
+    d = sidecar_dir(ctx)
+    if not d or not os.path.isdir(d):
+        return []
+    rows = []
+    for name in sorted(os.listdir(d)):
+        m = SIDECAR_RE.match(name)
+        if not m:
+            continue
+        try:
+            with open(os.path.join(d, name), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (IOError, OSError, ValueError):
+            continue
+        rows.append((int(m.group(1)), name, data))
+    rows.sort(key=lambda r: r[0])
+    if limit:
+        rows = rows[-limit:]
+    return rows
+
+
+def render_trend(ctx, limit=5):
+    """The read-only human-facing trend view the sidecars exist for. This is
+    NOT a substitute for --markdown in a retro -- a retro measures only its
+    own run (see the module header); this is for a human asking 'how are the
+    last N runs looking' outside of any single retro."""
+    d = sidecar_dir(ctx) or "$DEV_DIR/metrics"
+    rows = load_sidecars(ctx, limit=limit)
+    if not rows:
+        return ("no sidecars in %s yet -- nothing has been written there by "
+                "`run_metrics.py --out` (retro.md §2 does this once per run)"
+                % d)
+    header = "%-32s" % "sidecar"
+    for _, label in TREND_COLUMNS:
+        header += " %10s" % label
+    header += " %10s" % "milestone"
+    lines = ["last %d run%s from %s (oldest first):"
+             % (len(rows), "" if len(rows) == 1 else "s", d), "", header]
+    for _nnn, name, data in rows:
+        c = (data or {}).get("counters", {}) or {}
+        line = "%-32s" % name
+        for key, _label in TREND_COLUMNS:
+            v = c.get(key)
+            line += " %10s" % ("-" if v is None else str(v))
+        line += " %10s" % ((data or {}).get("milestone") or "-")
+        lines.append(line)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Selftest
 # ---------------------------------------------------------------------------
 FIXTURE_CONFIG = """#!/usr/bin/env bash
@@ -635,6 +713,7 @@ MAX_REVIEW_ROUNDS=2
 MAX_RUN_WORK_SECONDS=28800
 MAX_RUN_WALL_SECONDS=604800
 HOOKS_DIR=".claude/hooks"
+DEV_DIR=".agent-development"
 """
 
 
@@ -740,6 +819,47 @@ def selftest():
         if again["counters"]["dispatches_total"] == 99:
             print("SELFTEST FAIL: stale metrics file was merged, not rebuilt")
             ok = False
+
+        # --trend / sidecars: empty dir -> explanatory message, not a crash
+        root5 = build_repo("trend-empty", [])
+        ctx5 = make_ctx(repo_root=root5)
+        empty_trend = render_trend(ctx5, limit=5)
+        if "no sidecars" not in empty_trend:
+            print("SELFTEST FAIL: empty sidecar dir should explain itself, "
+                  "got: %r" % empty_trend)
+            ok = False
+
+        # --trend / sidecars: write three sidecars via --out, then read
+        # them back oldest-first, respecting --trend's limit
+        for nnn, esc, red, work in (("001", 1, 0, 100), ("002", None, 2, 200),
+                                     ("003", 3, 1, 300)):
+            m5 = build(ctx5, with_end_state=False)
+            m5["counters"]["escalation_requests"] = esc
+            m5["counters"]["red_gate_blocks"] = red
+            m5["counters"]["work_seconds"] = work
+            m5["milestone"] = "M1"
+            write_metrics(ctx5, m5,
+                          out=os.path.join(sidecar_dir(ctx5), "%s-M1.json" % nnn))
+        all_rows = load_sidecars(ctx5)
+        if [r[1] for r in all_rows] != ["001-M1.json", "002-M1.json",
+                                         "003-M1.json"]:
+            print("SELFTEST FAIL: sidecars not read back oldest-first: %s"
+                  % [r[1] for r in all_rows])
+            ok = False
+        limited = load_sidecars(ctx5, limit=2)
+        if [r[1] for r in limited] != ["002-M1.json", "003-M1.json"]:
+            print("SELFTEST FAIL: --trend limit kept the wrong rows: %s"
+                  % [r[1] for r in limited])
+            ok = False
+        rendered = render_trend(ctx5, limit=2)
+        if "002-M1.json" not in rendered or "001-M1.json" in rendered:
+            print("SELFTEST FAIL: rendered trend did not respect the limit:\n%s"
+                  % rendered)
+            ok = False
+        if "-" not in rendered:
+            print("SELFTEST FAIL: a null counter (002's escalations) must "
+                  "render as '-', not be dropped or shown as 0:\n%s" % rendered)
+            ok = False
     except EnvError as exc:
         print("SELFTEST FAIL: environment error: %s" % exc)
         ok = False
@@ -764,13 +884,28 @@ def main(argv=None):
                     help="add git-derived end state (commits, files, branch, HEAD)")
     ap.add_argument("--no-write", action="store_true",
                     help="do not write METRICS_JSON")
-    ap.add_argument("--out", help="write METRICS_JSON somewhere else")
+    ap.add_argument("--out", help="write METRICS_JSON somewhere else "
+                    "(a retro points this at $DEV_DIR/metrics/NNN-<milestone>.json "
+                    "to leave a permanent sidecar; see --trend)")
     ap.add_argument("--fail-on-contradiction", action="store_true",
                     help="exit 1 when a cross-counter contradiction is found")
     ap.add_argument("--list", action="store_true", help="list counter names")
+    ap.add_argument("--trend", nargs="?", const=5, type=int, metavar="N",
+                    help="print a last-N-runs table from $DEV_DIR/metrics/ "
+                         "sidecars, oldest first (default N=5); reads only, "
+                         "writes nothing")
     ap.add_argument("--repo-root")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.trend is not None:
+        try:
+            ctx = make_ctx(repo_root=args.repo_root)
+        except EnvError as exc:
+            sys.stderr.write("environment error: %s\n" % exc)
+            return 3
+        print(render_trend(ctx, limit=args.trend))
+        return 0
 
     if args.list:
         for name, etype, filt, label in COUNTER_SPECS:

@@ -100,9 +100,16 @@ Run: `agent/<task>` · <start>..<end> · work <hh:mm> · <n> commits · <n> disp
 One paragraph. What was attempted, what landed, what did not.
 
 ## 2. Mechanical record
-GENERATED. Do not rebuild it by hand. Run this and paste the output verbatim:
+GENERATED. Do not rebuild it by hand. Run this — with the SAME `NNN-<milestone>` you determined for
+this doc's own filename — and paste the output verbatim:
 
-    python .claude/hooks/run_metrics.py --markdown
+    python .claude/hooks/run_metrics.py --measure-end-state --markdown \
+      --out .agent-development/metrics/NNN-<milestone>.json
+
+`--out` is not optional: it is what turns this run's numbers into the permanent sidecar the next
+retro's §2 will name as its predecessor, and what `--trend` (a human-facing "last N runs" view, run
+outside of any retro) reads back. Skipping it is why this sidecar went unwritten for the harness's
+entire first window.
 
 Then add at most three sentences naming only the deltas that changed a decision. Nothing else.
 
@@ -153,6 +160,12 @@ discovering it the hard way.
   always. A gate that is not wired up and a gate that never had to fire are different facts, and only
   one of them is good news. If a counter reads `not instrumented`, that is an open question and it
   belongs in §7 as a refinement, not in a sentence in §2.
+- **The "Prior column" line names a file, not a number.** After writing this run's sidecar,
+  `ls .agent-development/metrics/` and take the entry immediately before `NNN-<milestone>.json` (there
+  may be none, for the first retro). Put its filename after `Prior column:` in §2's header line. Do not
+  copy its counters into this table — this file will never compute a cross-run delta for a live run
+  (see `run_metrics.py`'s own header); a side-by-side comparison across runs is what `--trend` is for,
+  read separately, by a human, outside of any single retro.
 
 The discipline behind this is the point: **the orchestrator is the party under review, so its account of
 its own run is testimony, not measurement.** The script has no stake in the answer.
