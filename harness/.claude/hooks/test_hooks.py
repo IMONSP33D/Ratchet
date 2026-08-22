@@ -4118,6 +4118,102 @@ class TestLessonParserToleratesWriterDrift(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestRetroAndConsolidationCadence(unittest.TestCase):
+    """Checks 18 and 19 are the learning loop's own gate. Both were satisfiable
+    while their contract was violated:
+
+      * check 18 keyed retros by MILESTONE, so on a re-attempted (nogo/halted)
+        milestone last run's retro passed the gate while this run filed none;
+      * check 19 fired only when the DOCUMENT count hit a multiple of 5 and only
+        inspected the last window, so a boundary run that ended off-gate made the
+        missed consolidation invisible forever, and a same-run supersession doc
+        (a legal second NNN) drifted the count.
+
+    Driven through the real CLI against build_good() fixtures.
+    """
+
+    def setUp(self):
+        self.cd = TestLessonParserToleratesWriterDrift._cd()
+        self.script = str(HOOKS / "check_done.py")
+
+    def _fixture(self):
+        d = tempfile.mkdtemp(prefix="ratchet-cadence-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self.cd.build_good(d)
+        return d
+
+    def _check(self, d, which):
+        r = subprocess.run(
+            [sys.executable, self.script, "--repo-root", d, "--tier", "ship",
+             "--check", which],
+            capture_output=True, text=True, timeout=90)
+        line = [l for l in r.stdout.splitlines() if which in l]
+        return r.returncode, (line[0] if line else r.stdout)
+
+    def _mkrun(self, d, nnn, outcome="shipped", ms="M1"):
+        runs = os.path.join(d, ".agent-development", "runs")
+        os.makedirs(runs, exist_ok=True)
+        with open(os.path.join(runs, "%03d-%s-%s.md" % (nnn, ms, outcome)),
+                  "w", encoding="utf-8") as f:
+            f.write("# retro %d\n" % nnn)
+
+    def test_a_previous_runs_retro_does_not_satisfy_a_reattempt(self):
+        d = self._fixture()
+        runs = os.path.join(d, ".agent-development", "runs")
+        os.rename(os.path.join(runs, "001-M1-shipped.md"),
+                  os.path.join(runs, "001-M1-nogo.md"))
+        idx = os.path.join(d, ".agent-development", "INDEX.md")
+        with open(idx, encoding="utf-8") as f:
+            t = f.read().replace("`shipped`", "`nogo`")
+        with open(idx, "w", encoding="utf-8") as f:
+            f.write(t)
+        stale = os.path.join(runs, "001-M1-nogo.md")
+        os.utime(stale, (time.time() - 3600, time.time() - 3600))
+        rc, line = self._check(d, "retro-filed")
+        self.assertEqual(rc, 1, "a stale retro from a previous attempt passed "
+                                "check 18:\n%s" % line)
+        self.assertIn("PREVIOUS run", line)
+        # A retro touched during THIS run satisfies it.
+        os.utime(stale, None)
+        rc, line = self._check(d, "retro-filed")
+        self.assertEqual(rc, 0, "this run's own retro was rejected:\n%s" % line)
+
+    def test_a_missed_consolidation_window_blocks_a_later_ship(self):
+        d = self._fixture()
+        for i in range(2, 7):            # runs 001..006, none consolidated
+            self._mkrun(d, i)
+        rc, line = self._check(d, "consolidation-cadence")
+        self.assertEqual(rc, 1, "6 runs with no consolidation passed check 19 "
+                                "because 6 %% 5 != 0:\n%s" % line)
+        self.assertIn("001-005", line)
+
+    def test_only_the_last_window_is_not_the_whole_check(self):
+        d = self._fixture()
+        for i in range(2, 11):           # runs 001..010
+            self._mkrun(d, i)
+        cons = os.path.join(d, ".agent-development", "consolidated")
+        os.makedirs(cons, exist_ok=True)
+        open(os.path.join(cons, "006-010.md"), "w", encoding="utf-8").close()
+        rc, line = self._check(d, "consolidation-cadence")
+        self.assertEqual(rc, 1, "the 001-005 window was forgiven once 006-010 "
+                                "existed:\n%s" % line)
+        self.assertIn("001-005", line)
+        open(os.path.join(cons, "001-005.md"), "w", encoding="utf-8").close()
+        rc, line = self._check(d, "consolidation-cadence")
+        self.assertEqual(rc, 0, "both windows present but check still failed:\n%s"
+                         % line)
+
+    def test_a_same_run_supersession_doc_does_not_inflate_the_run_count(self):
+        d = self._fixture()
+        self._mkrun(d, 2)
+        self._mkrun(d, 3)
+        self._mkrun(d, 4, outcome="halted")
+        self._mkrun(d, 4, outcome="superseded")   # same run, second NNN doc
+        rc, line = self._check(d, "consolidation-cadence")
+        self.assertEqual(rc, 0, "5 DOCS across 4 distinct runs wrongly demanded "
+                                "a consolidation:\n%s" % line)
+
+
 # --------------------------------------------------------------------------
 # RUNNER - --smoke / --list / --json / -v / -k
 # --------------------------------------------------------------------------

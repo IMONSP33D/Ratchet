@@ -1620,6 +1620,17 @@ def index_rows(ctx):
     return out
 
 
+def _run_start(ctx):
+    """Epoch seconds recorded at run start, or None if unset/unparseable."""
+    p = ctx.path("RUN_START")
+    if p and os.path.isfile(p):
+        try:
+            return int(float(read_text(p).strip().split("\n")[0]))
+        except ValueError:
+            return None
+    return None
+
+
 def check_retro_filed(ctx):
     n, name = 18, "retro-filed"
     if not ctx.milestone():
@@ -1632,6 +1643,24 @@ def check_retro_filed(ctx):
                    "PIPELINE.md Stage 6 step 3 dispatches it before the run "
                    "may stop at ship tier" % ctx.milestone())
     nnn, slug, outcome, _path = docs[-1]
+    # This run's retro must be from THIS run, not a previous attempt of the same
+    # milestone. A nogo/halted milestone is re-attempted under the same id, so
+    # keying only by milestone let last run's retro satisfy the gate while this
+    # run dispatched none --- exactly the "register never populated across nine
+    # retros" failure the check exists to catch. Mirror check 11's staleness.
+    start = _run_start(ctx)
+    if start is not None:
+        try:
+            fresh = os.path.getmtime(_path) >= start
+        except OSError:
+            fresh = True
+        if not fresh:
+            return bad(n, name,
+                       "runs/%03d-%s-%s.md is from a PREVIOUS run of %s (not "
+                       "touched since this run started) --- this run has not "
+                       "dispatched its own retro yet; a re-attempted milestone "
+                       "files a new NNN retro before it may stop at ship tier"
+                       % (nnn, slug, outcome, ctx.milestone()))
     rows = index_rows(ctx)
     if not any(r[0] == nnn and r[2] == outcome for r in rows):
         return bad(n, name,
@@ -1664,22 +1693,33 @@ def consolidated_docs(ctx):
 
 def check_consolidation_cadence(ctx):
     n, name = 19, "consolidation-cadence"
-    docs = run_docs(ctx)
-    total = len(docs)
-    if total == 0 or total % 5 != 0:
-        return ok(n, name, "%d run doc(s) filed; a consolidation is due every "
-                           "5th and none is due this run" % total)
-    lo, hi = docs[total - 5][0], docs[total - 1][0]
+    # Count distinct RUN NUMBERS, not documents: retro.md files a same-run
+    # supersession as a second NNN doc, so len(docs) drifts from the run count
+    # and both when-due and the window name go wrong. Dedupe first.
+    nums = sorted({d[0] for d in run_docs(ctx)})
+    total = len(nums)
     cons = consolidated_docs(ctx)
-    if not any(c == (lo, hi) for c in cons):
-        return bad(n, name,
-                   "%d run docs filed (a multiple of 5) but no "
-                   ".agent-development/consolidated/%03d-%03d.md --- "
-                   "retro.md's 'Every 5th run --- consolidate' step is due, "
-                   "and ACTIVE-LESSONS.md has not been rewritten from this "
-                   "window" % (total, lo, hi))
-    return ok(n, name, "consolidated/%03d-%03d.md present for this window"
-                       % (lo, hi))
+    # Check EVERY complete 5-run window, not only the last. A boundary run that
+    # ends nogo/halted files its retro without passing the ship gate, so the
+    # next run has total % 5 != 0 and the missed window becomes invisible
+    # forever. FAIL on the EARLIEST unconsolidated window so a skipped
+    # consolidation blocks the next ship whenever it is, not just at the boundary.
+    for k in range(5, total + 1, 5):
+        lo, hi = nums[k - 5], nums[k - 1]
+        if not any(c == (lo, hi) for c in cons):
+            return bad(n, name,
+                       "%d distinct runs filed but no "
+                       ".agent-development/consolidated/%03d-%03d.md for the "
+                       "runs %03d-%03d window --- retro.md's 'Every 5th run --- "
+                       "consolidate' step is overdue and ACTIVE-LESSONS.md has "
+                       "not been rewritten from that window"
+                       % (total, lo, hi, lo, hi))
+    windows = total // 5
+    if windows == 0:
+        return ok(n, name, "%d distinct run(s) filed; a consolidation is due "
+                           "every 5th and none is due yet" % total)
+    return ok(n, name, "all %d consolidation window(s) up to run %03d are present"
+                       % (windows, nums[windows * 5 - 1]))
 
 
 # ---------------------------------------------------------------------------
