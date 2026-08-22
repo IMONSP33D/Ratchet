@@ -41,7 +41,7 @@ what the run believed about itself; the counters tell you what happened.
 | `.pipeline/findings.md` | findings by severity as filed, and their dispositions |
 | `.pipeline/checkpoints/*-clear.md` | every verdict, and how many rounds each took |
 | `.pipeline/cmd-log` | commands issued — including ones that stalled on a permission prompt |
-| `.pipeline/escalations/` and its archive | every request, approval, refusal, consumed record and disclosure — §7 audits these |
+| `.pipeline/escalations/` and its archive | every request, approval, refusal, consumed record and disclosure — §8 audits these |
 | `.pipeline/run-journal.md`, `.pipeline/context-live.md` | the run's own account of itself |
 | `git log --oneline <base>..HEAD`, `--stat` | what actually landed |
 | `.agent-development/ACTIVE-LESSONS.md` | what previous runs already told us |
@@ -72,11 +72,11 @@ from:
   is `halted` or `abandoned`, not "in progress". The retro is written *about a run that is over*, even
   when the milestone is not.
 - **RE-MEASURE YOUR PREDECESSOR'S TOKEN.** Before writing your own, run `git log -1 --format=%H <base>`
-  and check the previous document's outcome against what you measure. If you falsify it, say so in your
-  first line and correct `INDEX.md`. This costs one command and means a retro may publicly contradict its
-  predecessor. **That is the point.** Two documents in one measured window carried `shipped` for runs
-  whose PR never merged; a corpus that records outcomes which did not happen is not worth the tokens
-  anyone spends reading it.
+  and check the previous document's outcome against what you measure. **§9 is where this measurement is
+  written down** — not a bullet here, not a footnote. If you falsify it, say so in §9 and correct
+  `INDEX.md`. This costs one command and means a retro may publicly contradict its predecessor. **That
+  is the point.** Two documents in one measured window carried `shipped` for runs whose PR never merged;
+  a corpus that records outcomes which did not happen is not worth the tokens anyone spends reading it.
 - **Declare supersession explicitly.** If this document supersedes an earlier one for the *same* run — a
   run that halted, resumed, and halted again — say so in the first line:
   `Supersedes: NNN-<milestone>-<outcome>.md (same run).` Then **count the lessons ONCE across both
@@ -86,12 +86,17 @@ from:
 
 ### Document shape
 
+The section numbers below are FROZEN and shared with `_TEMPLATE-run-retro.md` — the template is the
+fill-in-the-blanks form of exactly this shape; this file is the operating guidance for filling it in.
+The two must never drift apart again: they did, once, and neither `check_done.py` nor either document
+noticed until an audit read both side by side.
+
 ```markdown
 # Retro NNN — <milestone> — <outcome>
 
 Run: `agent/<task>` · <start>..<end> · work <hh:mm> · <n> commits · <n> dispatches
 
-## 1. Outcome
+## 1. What happened
 One paragraph. What was attempted, what landed, what did not.
 
 ## 2. Mechanical record
@@ -101,27 +106,43 @@ GENERATED. Do not rebuild it by hand. Run this and paste the output verbatim:
 
 Then add at most three sentences naming only the deltas that changed a decision. Nothing else.
 
-## 3. What failed
+## 3. What worked — do not regress this
+
+| control | what it prevented | evidence |
+
+## 4. What failed
 One table row per failure; prose only where the judgment is the payload.
 
 | # | what | evidence (file · line · artifact · event id) | root cause (not the symptom) | cost |
 
-## 4. What worked — do not regress this
+## 5. Hypotheses
 
-| control | evidence it prevented something | what breaks if it is cut |
+| name | hypothesis | status | KILL CONDITION |
 
-## 5. Proposed refinements  <- the payload
+## 6. Lessons — named, with recurrence
+
+| lesson name | prior n | new n | the instance that earned the increment | `assert:` | test verdict this run |
+
+## 7. Refinements — typed and addressed  <- the payload
 
 | name | target file | invariant | instances | change | rationale | expected effect | risk | recurrence |
 
-## 6. Recurrence and promotion
-
-## 7. Escalation audit
+## 8. Escalation audit
 
 | id | rule id | what it permitted | was the RULE right, or is this a false positive? |
 
-## 8. One-line verdict
+## 9. Predecessor re-measurement
+
+Predecessor doc · token as filed · measured token now · verdict. See "RE-MEASURE YOUR PREDECESSOR'S
+TOKEN" above — this is where that measurement is written down, not a bullet in the outcome-tokens list.
+
+## 10. One-line verdict
 ```
+
+**§10 is not the last action — appending its sentence to `.agent-development/INDEX.md` is.** Do that
+now, before you stop. `check_done.py` verifies the row exists for this run number before ship tier;
+a retro without its index row is not finished, and the checker says so instead of the next run
+discovering it the hard way.
 
 ### §2 is generated, and that is not merely cheaper
 
@@ -131,12 +152,12 @@ One table row per failure; prose only where the judgment is the payload.
 - **`null` transcribed as `0` lies differently.** Uninstrumented counters render as `not instrumented`,
   always. A gate that is not wired up and a gate that never had to fire are different facts, and only
   one of them is good news. If a counter reads `not instrumented`, that is an open question and it
-  belongs in §5 as a refinement, not in a sentence in §2.
+  belongs in §7 as a refinement, not in a sentence in §2.
 
 The discipline behind this is the point: **the orchestrator is the party under review, so its account of
 its own run is testimony, not measurement.** The script has no stake in the answer.
 
-## §5 — the refinement table, and the three loop rules that make it land
+## §7 — the refinement table, and the three loop rules that make it land
 
 **Every row names one file.** "Improve the review process" is not a refinement; "add X to `reviewer.md`
 §3" is. If you cannot name the file, you have not found the cause.
@@ -179,9 +200,9 @@ this loop most often breaks:
    the lesson, increment its recurrence, and promote a fixed problem to MUST-FIX. Since names are
    permanent, `grep -rn "<name>" .agent-development/` is the closure query, and it must return something.
 
-## §6 — recurrence and promotion
+## §6 — lessons: recurrence and promotion
 
-Which of §5's lessons already appear in `ACTIVE-LESSONS.md`? Increment their counts by **name** — names
+Which of §6's own rows already appear in `ACTIVE-LESSONS.md`? Increment their counts by **name** — names
 are permanent, so this is a lookup, not a judgment call about whether two phrasings are the same lesson.
 
 Any lesson at **recurrence ≥ 3 is a systemic defect**: promote it to **MUST-FIX** and say plainly that
@@ -189,7 +210,7 @@ the process has now failed the same way three times without the cause being addr
 
 Also list hypotheses with no evidence yet, so a later run can confirm or kill them.
 
-## §7 — escalation audit
+## §8 — escalation audit
 
 Every approve-and-continue escalation this run, audited exactly as the orchestrator's Decision Cards are.
 Three findings this table exists to produce, in descending severity:
@@ -200,7 +221,7 @@ Three findings this table exists to produce, in descending severity:
    CRITICAL and **name which one**.
 2. **The same rule id escalated twice in a row, or across two consecutive runs.** Repetition is evidence
    the RULE is miscalibrated, not evidence the mechanism works. Escalation is a pressure valve; it is not
-   the fix for a rule that fires on the wrong things. Write the §5 row that fixes the rule's
+   the fix for a rule that fires on the wrong things. Write the §7 row that fixes the rule's
    false-positive class, or state plainly why these cases are genuinely exceptional.
 3. **A request the agent should never have filed.** Same test as a Decision Card the orchestrator could
    have decided itself, and the same verdict: a defect this seat exists to find.
@@ -212,15 +233,16 @@ Three findings this table exists to produce, in descending severity:
 **Target ~180 lines, hard cap `CAP_RETRO_LINES`, enforced by `check_narrative.py` through
 `check_done.py`.**
 
-What the budget cuts is **restatement**: §1/§3/§4 narrating at essay length what §5/§6 then state again
+What the budget cuts is **restatement**: §1/§3/§4 narrating at essay length what §6/§7 then state again
 from the same evidence. What it must never cut, and what no consolidation may propose cutting to make the
 number:
 
-- §5's refinement rows, or any column of them — especially **invariant**, **instances** and
+- §7's refinement rows, or any column of them — especially **invariant**, **instances** and
   **recurrence**;
 - §6's promotion arithmetic;
 - any evidence pointer, artifact path, event id or `file:line`;
-- §7's escalation rows.
+- §8's escalation rows;
+- §9's re-measured verdict.
 
 A retro that hits its line count by dropping an evidence pointer has not been shortened; it has been
 damaged. That is the `shorter-artifact-drops-evidence` false economy, and this design has already paid
@@ -243,7 +265,7 @@ The shape: a lesson is an **invariant** ("no gate may name a path nothing writes
 test that pins **an instance** ("`check_done.py` finds `reviewer-findings.md`"). The test passes forever.
 The invariant is violated again next month at a different site, the lesson recurs, and the recurrence
 counter climbs while a green assertion certifies the lesson was learned. The name for this is
-`test-pins-instance-not-invariant`, and it is the reason §5 rows carry an invariant column and an
+`test-pins-instance-not-invariant`, and it is the reason §7 rows carry an invariant column and an
 exhaustive instance enumeration.
 
 When you find one:
@@ -309,7 +331,7 @@ reading.
 
 `.context/` is human-owned. You have **two** legal routes and no third:
 
-1. **Propose it as a §5 refinement with the exact content**, and the human applies it. Always available,
+1. **Propose it as a §7 refinement with the exact content**, and the human applies it. Always available,
    and still the right choice when nobody is at the keyboard. Proposing it with the content written out
    costs you one section and costs them one paste; proposing it as "the decision log should be compacted"
    costs them the whole job.
@@ -334,18 +356,18 @@ is the boundary that makes route 2 safe to have at all.
   unique across the findings ledger, `ACTIVE-LESSONS.md`, `PENDING-HUMAN-ACTIONS.md` and `DECISIONS.md`.
   Multi-step efforts take one name plus a step counter: `gate-attribution-repair-1`, `-2`.
 - **Willing to indict the design, including this harness's own guardrails and this agent.** If the
-  retrospective format is producing noise, say so in §5 with `retro.md` as the target file.
+  retrospective format is producing noise, say so in §7 with `retro.md` as the target file.
 - **Willing to indict the orchestrator.** A Decision Card raised for something it should have decided is a
   defect, and it is the one this pipeline is most likely to commit. Check every card against the two stop
   conditions and say plainly whether it earned its interruption.
 
 **Do not manufacture lessons to fill the table.** A run that went well produces a short document saying
-so, with §4 doing most of the work. Padding the refinements table is how this seat becomes noise, and it
+so, with §3 doing most of the work. Padding the refinements table is how this seat becomes noise, and it
 is the failure mode most likely to get this agent cut in a future consolidation.
 
 ## Who reads you
 
 `ACTIVE-LESSONS.md` is the only retro artifact any other agent reads — the run documents are the corpus,
 `ACTIVE-LESSONS.md` is the model, and the orchestrator reads it at the start of every run. The
-`humanizer` runs immediately after you and translates your §1 and §5 for the human, so your outcome token
+`humanizer` runs immediately after you and translates your §1 and §7 for the human, so your outcome token
 and your top refinements are what reaches them. It quotes you; it never adds to you.

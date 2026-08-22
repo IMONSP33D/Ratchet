@@ -1550,6 +1550,120 @@ def check_naming(ctx):
 
 
 # ---------------------------------------------------------------------------
+# 18  retro-filed  (the run's runs/ document AND its INDEX.md row both exist)
+# ---------------------------------------------------------------------------
+# In the source pipeline this register was never populated across nine
+# retrospectives (INDEX.md says so). README.md, INDEX.md and
+# _TEMPLATE-run-retro.md all state that check_done.py enforces this --- this
+# check is what makes that true, rather than a documented promise nothing
+# implements. Reader (here) and writer (retro.md SS10, INDEX.md's own
+# "Row format" comment) share the same frozen shapes; keep them together.
+CLOSED_OUTCOME_TOKENS = ("shipped", "nogo", "halted", "abandoned", "superseded",
+                         "awaiting-ship")
+RUN_DOC_RE = re.compile(
+    r"^(\d{3,})-(.+)-(%s)\.md$" % "|".join(CLOSED_OUTCOME_TOKENS))
+INDEX_ROW_RE = re.compile(
+    r"^\|\s*(\d{3,})\s*\|\s*([^|]*?)\s*\|\s*`?(%s)`?\s*\|"
+    % "|".join(CLOSED_OUTCOME_TOKENS))
+
+
+def run_docs(ctx):
+    """[(nnn, milestone_slug, outcome, path)] for every runs/ doc whose
+    filename matches CONTRACT 7.10, sorted by nnn ascending."""
+    dev = ctx.path("DEV_DIR")
+    d = os.path.join(dev, "runs") if dev else None
+    out = []
+    if not d or not os.path.isdir(d):
+        return out
+    for fn in os.listdir(d):
+        m = RUN_DOC_RE.match(fn)
+        if m:
+            out.append((int(m.group(1)), m.group(2), m.group(3),
+                        os.path.join(d, fn)))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def index_rows(ctx):
+    """[(nnn, milestone_cell, outcome)] for every INDEX.md register row
+    matching the frozen shape. The example row's HTML comment block and the
+    table header never match: no leading digit run-id cell, no closed
+    outcome token."""
+    dev = ctx.path("DEV_DIR")
+    p = os.path.join(dev, "INDEX.md") if dev else None
+    out = []
+    if not p or not os.path.isfile(p):
+        return out
+    for line in read_text(p).split("\n"):
+        m = INDEX_ROW_RE.match(line.strip())
+        if m:
+            out.append((int(m.group(1)), m.group(2).strip(), m.group(3)))
+    return out
+
+
+def check_retro_filed(ctx):
+    n, name = 18, "retro-filed"
+    if not ctx.milestone():
+        return warn(n, name, "no active milestone token to check a retro against")
+    docs = [d for d in run_docs(ctx) if d[1] == ctx.milestone()]
+    if not docs:
+        return bad(n, name,
+                   "no .agent-development/runs/NNN-%s-<outcome>.md for this "
+                   "milestone --- the retro has not been dispatched yet; "
+                   "PIPELINE.md Stage 6 step 3 dispatches it before the run "
+                   "may stop at ship tier" % ctx.milestone())
+    nnn, slug, outcome, _path = docs[-1]
+    rows = index_rows(ctx)
+    if not any(r[0] == nnn and r[2] == outcome for r in rows):
+        return bad(n, name,
+                   "runs/%03d-%s-%s.md exists but .agent-development/INDEX.md "
+                   "has no matching row --- appending it is the retro's LAST "
+                   "STEP (retro.md SS10, INDEX.md); a retro without its index "
+                   "row is not finished" % (nnn, slug, outcome))
+    return ok(n, name, "runs/%03d-%s-%s.md is filed and INDEX.md carries its row"
+                       % (nnn, slug, outcome))
+
+
+# ---------------------------------------------------------------------------
+# 19  consolidation-cadence  (every 5th run doc has a matching consolidated/)
+# ---------------------------------------------------------------------------
+CONSOLIDATED_RE = re.compile(r"^(\d{3,})-(\d{3,})\.md$")
+
+
+def consolidated_docs(ctx):
+    dev = ctx.path("DEV_DIR")
+    d = os.path.join(dev, "consolidated") if dev else None
+    out = []
+    if not d or not os.path.isdir(d):
+        return out
+    for fn in os.listdir(d):
+        m = CONSOLIDATED_RE.match(fn)
+        if m:
+            out.append((int(m.group(1)), int(m.group(2))))
+    return out
+
+
+def check_consolidation_cadence(ctx):
+    n, name = 19, "consolidation-cadence"
+    docs = run_docs(ctx)
+    total = len(docs)
+    if total == 0 or total % 5 != 0:
+        return ok(n, name, "%d run doc(s) filed; a consolidation is due every "
+                           "5th and none is due this run" % total)
+    lo, hi = docs[total - 5][0], docs[total - 1][0]
+    cons = consolidated_docs(ctx)
+    if not any(c == (lo, hi) for c in cons):
+        return bad(n, name,
+                   "%d run docs filed (a multiple of 5) but no "
+                   ".agent-development/consolidated/%03d-%03d.md --- "
+                   "retro.md's 'Every 5th run --- consolidate' step is due, "
+                   "and ACTIVE-LESSONS.md has not been rewritten from this "
+                   "window" % (total, lo, hi))
+    return ok(n, name, "consolidated/%03d-%03d.md present for this window"
+                       % (lo, hi))
+
+
+# ---------------------------------------------------------------------------
 # Registry / runner
 # ---------------------------------------------------------------------------
 CHECKS = [
@@ -1583,6 +1697,10 @@ CHECKS = [
     (16, "recap", "five frozen headings in order, under the word cap", check_recap),
     (17, "naming", "filed names valid per doctrine and unique across registers",
      check_naming),
+    (18, "retro-filed", "runs/NNN-<milestone>-<outcome>.md exists; INDEX.md "
+                        "carries its row", check_retro_filed),
+    (19, "consolidation-cadence", "every 5th run doc has a matching "
+                                  "consolidated/NNN-NNN.md", check_consolidation_cadence),
 ]
 CHECK_NAMES = [c[1] for c in CHECKS]
 
@@ -1788,6 +1906,15 @@ def build_good(root):
        "`assert: tests/test_gate.py::test_head_match`\n")
     _w(os.path.join(root, ".agent-development", "PENDING-HUMAN-ACTIONS.md"),
        "# Pending\n\n## rotate-escalation-key\nOwner: human\n")
+    # check 18/19 fixtures: this run's retro doc (CONTRACT 7.10) with a
+    # matching INDEX.md row --- one run doc is not a multiple of 5, so check
+    # 19 is satisfied by omission (no consolidation is due yet).
+    _w(os.path.join(root, ".agent-development", "runs", "001-M1-shipped.md"),
+       "# Retro 001 --- M1 --- shipped\n\nFixture retro.\n")
+    _w(os.path.join(root, ".agent-development", "INDEX.md"),
+       "# INDEX.md\n\n| run | milestone | outcome | date | PR | one-line result |\n"
+       "|---|---|---|---|---|---|\n"
+       "| 001 | M1 | `shipped` | 2026-08-20 | #42 | Fixture run shipped clean. |\n")
     _w(os.path.join(root, ".pipeline", "escalations", "ledger.jsonl"),
        json.dumps({"id": "esc-1", "rule": "delete-scope", "state": "consumed",
                    "postcondition": "", "postcondition_status": "n/a"}) + "\n")
@@ -1933,6 +2060,23 @@ def _mut_naming(root):
     _w(p, read_text(p).replace("gate-blames-wrong-actor", "fix-issue"))
 
 
+def _mut_retro_filed(root):
+    # the retro was never dispatched this run --- no runs/ doc for M1 at all.
+    os.remove(os.path.join(root, ".agent-development", "runs", "001-M1-shipped.md"))
+
+
+def _mut_consolidation_cadence(root):
+    # 5 run docs filed (a multiple of 5) but no consolidated/001-005.md.
+    for i in range(2, 6):
+        _w(os.path.join(root, ".agent-development", "runs",
+                        "%03d-M1-shipped.md" % i),
+           "# Retro %03d --- M1 --- shipped\n\nFixture retro.\n" % i)
+        p = os.path.join(root, ".agent-development", "INDEX.md")
+        _w(p, read_text(p) +
+           "| %03d | M1 | `shipped` | 2026-08-20 | #%d | Fixture run shipped clean. |\n"
+           % (i, 40 + i))
+
+
 MUTATORS = {
     "gate-artifact": _mut_gate_artifact,
     "manifest-scope": _mut_manifest_scope,
@@ -1951,6 +2095,8 @@ MUTATORS = {
     "metrics": _mut_metrics,
     "recap": _mut_recap,
     "naming": _mut_naming,
+    "retro-filed": _mut_retro_filed,
+    "consolidation-cadence": _mut_consolidation_cadence,
 }
 
 
