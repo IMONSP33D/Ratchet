@@ -18,12 +18,17 @@
 #      elapsed vs MAX_RUN_WALL_SECONDS, and whether a run is active at all.
 #   2. $CONTEXT_LIVE verbatim, if present (the orchestrator's working state).
 #   3. $ACTIVE_LESSONS - the only retro artifact any agent reads.
-#   4. Rows of $PENDING_ACTIONS with recurrence >= 3. A lesson that has
-#      recurred three times is a systemic defect, not a note.
-#   5. A control-layer self-test probe: test_hooks.py --smoke, pass or fail.
-#      Probing the channel before it is needed is the point - a control layer
-#      that is broken at 03:00 on the tenth block should have said so at 09:00
-#      when the session opened.
+#   4. Rows of $PENDING_ACTIONS at recurrence >= 3, OR filed at install (the
+#      three install-time rows are prerequisites, not incidents, and their
+#      recurrence never climbs on its own -- a pure threshold would never
+#      print them).
+#   5. Three control-layer self-test probes: test_hooks.py --smoke; the
+#      approve-and-continue escalation channel (key present, approve.sh
+#      runnable); the pager (RATCHET_WEBHOOK_URL set, https, notify.sh
+#      present). Probing before any of them is needed is the point - a
+#      control layer that is broken at 03:00 on the tenth block, or a pager
+#      that pages nobody, should have said so at 09:00 when the session
+#      opened.
 #
 # SIDE EFFECTS (this hook is a run-lifecycle PARTICIPANT, not an owner)
 #   - Clears stale per-session counters written by the Stop/SubagentStop gates
@@ -148,16 +153,23 @@ _clear_stale_counters() {
   return 0
 }
 
-# Rows of PENDING_ACTIONS whose recurrence column is >= 3.
-# Two parses, in order: a pipe table with a "recurrence" header column, then a
-# free-text "recurrence: N" / "recurrence x N" anywhere on the line.
-_pending_high_recurrence() {
-  local f="$1" hdr_line="" col=0 i n line cell out=""
+# Rows of PENDING_ACTIONS that must print at SessionStart: recurrence >= 3,
+# OR filed at install time. The three rows install.sh pre-files (branch
+# protection, unfilled contracts, no webhook) all ship at recurrence 0 --
+# they are prerequisites, not repeated incidents, and recurrence never climbs
+# on its own (only a retro increments it, once per run). A pure recurrence>=3
+# filter therefore never prints them, which is exactly the failure this
+# register exists to prevent: three install-time warnings the source
+# pipeline's own webhook row (see "why it blocks" below) says paged nobody
+# for five runs because nothing printed them. "filed == install" is a second,
+# independent reason to print -- not a threshold to game at filing time.
+_pending_must_print() {
+  local f="$1" hdr_line="" rcol=0 fcol=0 i n filed line cell out=""
   [ -r "$f" ] || return 0
-  # A header cell is a LABEL: it contains "recurrence" and no digits. That one
-  # extra condition is what stops a data row like "| ... recurrence x 5 |" from
-  # being mistaken for the header and skipped - which would drop exactly the
-  # rows this function exists to find.
+  # A header cell is a LABEL: it contains the column word and no digits. That
+  # stops a data row like "| ... recurrence x 5 |" from being mistaken for
+  # the header and skipped - which would drop exactly the rows this function
+  # exists to find.
   hdr_line="$(grep -n -i '^|.*recurrence' "$f" 2>/dev/null | head -n 1)"
   local hdr="" cand=""
   if [ -n "$hdr_line" ]; then
@@ -168,9 +180,11 @@ _pending_high_recurrence() {
       i=$((i+1))
       case "$(printf '%s' "$cell" | tr 'A-Z' 'a-z')" in
         *[0-9]*) continue ;;
-        *recurrence*) col=$i; hdr="$cand"; break ;;
+        *recurrence*) rcol=$i ;;
+        *filed*) fcol=$i ;;
       esac
     done
+    [ "$rcol" -gt 0 ] && hdr="$cand"
     IFS="$IFSOLD"
   fi
   while IFS= read -r line; do
@@ -188,14 +202,20 @@ _pending_high_recurrence() {
       *---*) continue ;;
     esac
     n=""
-    if [ "$col" -gt 0 ]; then
-      n="$(printf '%s' "$line" | awk -F'|' -v c="$col" '{gsub(/[^0-9]/,"",$c); print $c}' 2>/dev/null)"
+    if [ "$rcol" -gt 0 ]; then
+      n="$(printf '%s' "$line" | awk -F'|' -v c="$rcol" '{gsub(/[^0-9]/,"",$c); print $c}' 2>/dev/null)"
     fi
     if [ -z "$n" ]; then
       n="$(printf '%s' "$line" | sed -n 's/.*[Rr]ecurrence[^0-9]\{0,6\}\([0-9][0-9]*\).*/\1/p' | head -n 1)"
     fi
-    case "$n" in (*[!0-9]*|"") continue ;; esac
-    [ "$n" -ge 3 ] && out="${out}${line}"$'\n'
+    filed=""
+    if [ "$fcol" -gt 0 ]; then
+      filed="$(printf '%s' "$line" | awk -F'|' -v c="$fcol" '{gsub(/^[ \t]+|[ \t]+$/,"",$c); print $c}' 2>/dev/null | tr 'A-Z' 'a-z')"
+    fi
+    case "$n" in (*[!0-9]*|"") n=0 ;; esac
+    if [ "$n" -ge 3 ] || [ "$filed" = "install" ]; then
+      out="${out}${line}"$'\n'
+    fi
   done < "$f"
   printf '%s' "$out"
 }
@@ -221,6 +241,27 @@ _channel_probe() {
   fi
   if [ -n "$issues" ]; then printf 'FAIL - escalation channel %s' "$issues"; return 0; fi
   printf 'PASS - escalation channel ready (key present, approve.sh runnable)'
+}
+
+# _webhook_probe - can a stopped/escalated run actually page anyone?
+#
+# PENDING-HUMAN-ACTIONS.md's webhook-never-configured row has always claimed
+# "session-start.sh warns at every run start" -- this is that warning. Without
+# it, RATCHET_WEBHOOK_URL unset was a silent default: the harness worked, an
+# unattended halt just paged nobody, and nothing said so until this probe.
+# This checks configuration only (unset, non-https, or notify.sh missing) --
+# it never fires a real notification. Use `notify.sh --test` for that.
+_webhook_probe() {
+  local url="${RATCHET_WEBHOOK_URL:-}" issues=""
+  if [ -z "$url" ]; then
+    issues="UNSET - no RATCHET_WEBHOOK_URL. A stopped or escalated unattended run pages nobody; you find out by going and looking. Set it, then prove the path: .claude/hooks/notify.sh --test"
+  elif [ "${url#https://}" = "$url" ]; then
+    issues="NOT HTTPS - RATCHET_WEBHOOK_URL must be https; notify.sh refuses to send to it."
+  elif [ ! -r "$RT_SELF_DIR/notify.sh" ]; then
+    issues="MISSING - .claude/hooks/notify.sh is not present; nothing can send to the webhook even though it is configured."
+  fi
+  if [ -n "$issues" ]; then printf 'FAIL - webhook %s' "$issues"; return 0; fi
+  printf 'PASS - webhook configured (https, notify.sh present)'
 }
 
 _smoke_probe() {
@@ -259,19 +300,27 @@ _selftest() {
   got="$(_pct 50 0)"; [ "$got" = "?" ] || { echo "FAIL pct zero: $got"; fail=1; }
   tmp="$(mktemp 2>/dev/null || echo /tmp/rt-ss-$$)"
   {
-    printf '| name | status | recurrence |\n'
-    printf '|---|---|---|\n'
-    printf '| gate-blames-wrong-actor | open | 4 |\n'
-    printf '| pager-never-fires | open | 1 |\n'
+    printf '| name | filed | status | recurrence |\n'
+    printf '|---|---|---|---|\n'
+    printf '| gate-blames-wrong-actor | 2026-01-01 | open | 4 |\n'
+    printf '| pager-never-fires | 2026-01-01 | open | 1 |\n'
   } > "$tmp"
-  got="$(_pending_high_recurrence "$tmp" | wc -l | tr -d ' ')"
+  got="$(_pending_must_print "$tmp" | wc -l | tr -d ' ')"
   [ "$got" = "1" ] || { echo "FAIL pending table parse: $got"; fail=1; }
   printf 'a note with recurrence: 3 inside\n' > "$tmp"
-  got="$(_pending_high_recurrence "$tmp" | wc -l | tr -d ' ')"
+  got="$(_pending_must_print "$tmp" | wc -l | tr -d ' ')"
   [ "$got" = "0" ] || { echo "FAIL pending non-table line must not match: $got"; fail=1; }
   printf '| free form recurrence x 5 |\n' > "$tmp"
-  got="$(_pending_high_recurrence "$tmp" | wc -l | tr -d ' ')"
+  got="$(_pending_must_print "$tmp" | wc -l | tr -d ' ')"
   [ "$got" = "1" ] || { echo "FAIL pending freetext parse: $got"; fail=1; }
+  {
+    printf '| name | filed | status | recurrence |\n'
+    printf '|---|---|---|---|\n'
+    printf '| webhook-never-configured | install | open | 0 |\n'
+    printf '| unrelated-low-recurrence | 2026-01-01 | open | 1 |\n'
+  } > "$tmp"
+  got="$(_pending_must_print "$tmp" | wc -l | tr -d ' ')"
+  [ "$got" = "1" ] || { echo "FAIL pending filed=install must print at recurrence 0: $got"; fail=1; }
   rm -f "$tmp" 2>/dev/null
   got="$(_json_str 'a
 b')"
@@ -355,23 +404,27 @@ main() {
   fi
 
   f="$(_abs "${PENDING_ACTIONS:-.agent-development/PENDING-HUMAN-ACTIONS.md}")"
-  content="$(_pending_high_recurrence "$f")"
+  content="$(_pending_must_print "$f")"
   if [ -n "$content" ]; then
-    _add "## Pending human actions with recurrence 3 or more"
+    _add "## Pending human actions (recurrence 3+, or filed at install)"
     _add ""
-    _add "A lesson that has recurred three times is a systemic defect, not a note."
+    _add "A lesson that has recurred three times is a systemic defect, not a note. A row"
+    _add "filed at install is a prerequisite the harness cannot function safely without,"
+    _add "not an incident count -- it prints every run until DONE, regardless of recurrence."
     _add ""
     _add "$content"
     _add ""
   fi
 
-  local probe chan
+  local probe chan pager
   probe="$(_smoke_probe)"
   chan="$(_channel_probe)"
+  pager="$(_webhook_probe)"
   _add "## Control-layer self test"
   _add ""
   _add "$probe"
   _add "$chan"
+  _add "$pager"
   _add ""
   case "$probe" in
     FAIL*) _add "The control layer is probing FAILED at session start. Gates that fail closed will block, and a block you cannot clear is the expected consequence. Fix this before dispatching anything." ;;
@@ -379,12 +432,16 @@ main() {
   case "$chan" in
     FAIL*) _add "The approve-and-continue channel is NOT usable. Refusals that say they are ESCALATABLE are lying: nothing can sign them. File this in PENDING-HUMAN-ACTIONS and raise it on the first Decision Card - do not discover it mid-run against a deadline." ;;
   esac
+  case "$pager" in
+    FAIL*) _add "No pager is configured. A stopped or escalated unattended run will NOT reach a human -- see webhook-never-configured in PENDING-HUMAN-ACTIONS.md." ;;
+  esac
 
   if [ -r "$RT_SELF_DIR/pipeline-event.sh" ]; then
     bash "$RT_SELF_DIR/pipeline-event.sh" session_start \
       "milestone=${milestone:-}" "active=$active" "work=$work" "wall=$wall" \
       "smoke=$(case "$probe" in PASS*) echo pass ;; *) echo fail ;; esac)" \
-      "channel=$(case "$chan" in PASS*) echo pass ;; *) echo fail ;; esac)" >/dev/null 2>&1 || true
+      "channel=$(case "$chan" in PASS*) echo pass ;; *) echo fail ;; esac)" \
+      "pager=$(case "$pager" in PASS*) echo pass ;; *) echo fail ;; esac)" >/dev/null 2>&1 || true
   fi
 
   _emit

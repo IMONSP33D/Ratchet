@@ -63,19 +63,28 @@ for it three times.
 | `spec-and-milestones-unfilled` | install | Fill `.context/SPEC.md` and `.context/MILESTONES.md` with this project's real requirement ids and WIN rows. Every WIN row needs a **script-decidable verify command** (exit 0 = pass) in the frozen format `\| WIN-M<n>-<nn> \| <name> \| <requirement ids> \| <verify command> \| <evidence path> \|`. Verify with `python .claude/hooks/proof_map.py --milestone M1` — it must collect >=1 test per row. | Both files are Tier 2b (`GOVERNING_CORPUS`) and no agent may write them. Until they carry real rows, the milestone gate has nothing to close on: `check_done.py` cannot evidence a WIN row that does not exist, and a WIN row with no verify command is a **setup defect** the pipeline is required to raise rather than adjudicate. The harness installs inert without this. | 0 | OPEN |
 | `webhook-never-configured` | install | Export `RATCHET_WEBHOOK_URL` in the environment the agent runs in — **https only**. Then fire it deliberately once to prove the path: `bash .claude/hooks/notify.sh --test`. Do not paste the URL into any tracked file. | The value is a secret, and Hard Stop 1 forbids any agent from handling one. Until it is set, an escalation or a halt in an unattended run **pages nobody** and the run halts into silence. `session-start.sh` warns at every run start; that warning is not a substitute. | 0 | OPEN |
 
-### Note on the first two rows
+### Note on the three install-filed rows
 
-`branch-protection-missing` and `webhook-never-configured` are pre-filed at install because in the
-source pipeline **both sat OPEN for five consecutive runs**. The webhook one was a single environment
-variable; three run-parks paged nobody while it was unset. The branch-protection one left the only
-real merge enforcement absent for the entire first window, during which the pipeline's own documents
-correctly described it as the only control that holds. Neither was hard. Both were invisible, because
-they were rows in an unranked list nobody printed. Doing them now costs about five minutes.
+All three rows above are pre-filed at install, all at `recurrence 0` — they are prerequisites the
+harness cannot function safely without, not incidents that have recurred. `branch-protection-missing`
+and `webhook-never-configured` are ported from the source pipeline, where **both sat OPEN for five
+consecutive runs**: the webhook was a single environment variable, and three run-parks paged nobody
+while it was unset; branch protection left the only real merge enforcement absent for the entire first
+window, during which the pipeline's own documents correctly described it as the only control that
+holds. Neither was hard. Both were invisible, because they were rows in an unranked list nobody
+printed AND their recurrence never climbed past the print threshold, since nothing increments
+recurrence except a retro. `spec-and-milestones-unfilled` is filed for the same reason: it blocks
+every gate from install day one, at recurrence 0, forever, unless something prints it regardless.
+
+**This is why `session-start.sh` prints every row filed at install (`filed == install`) unconditionally,
+in addition to the `recurrence >= 3` rows** — a recurrence-only filter cannot be the whole rule when the
+rows most worth printing are, by construction, rows whose recurrence will never rise on its own. Doing
+all three now costs about five minutes.
 
 <!--
 Row format (frozen - parsed by session-start.sh and check_done.py):
 | <name> | <YYYY-MM-DD or "install"> | <exact command or click-path> | <why the pipeline cannot do it> | <n> | OPEN or "DONE YYYY-MM-DD" |
 
-Ordering: recurrence descending. OPEN rows at recurrence >= 3 are printed at SessionStart.
+Ordering: recurrence descending. OPEN rows print at SessionStart when recurrence >= 3 OR filed == install.
 Names: CONTRACT section 6 - kebab-case, 2-5 words, states the problem, permanent, never reused.
 -->

@@ -25,6 +25,11 @@
 #      in clear text.
 #   4. Rate limits with a marker file so a stall that re-notifies every few
 #      seconds pages once.
+#   5. `--test` synthesizes one escalation-class notification and runs it
+#      through the real classify -> page -> log path, printing the outcome to
+#      stdout/stderr -- the command PENDING-HUMAN-ACTIONS.md's
+#      webhook-never-configured row and session-start.sh's webhook probe both
+#      tell a human to run once, to prove the path before trusting it.
 #
 #   The payload is CONSTRUCTED here, minimally. The raw hook payload is never
 #   forwarded: it can contain transcript paths and arbitrary session content,
@@ -176,7 +181,18 @@ _selftest() {
 main() {
   if [ "${1:-}" = "--selftest" ]; then _selftest; exit "$?"; fi
 
-  [ -t 0 ] || RT_RAW="$(cat 2>/dev/null || true)"
+  # --test: fire a REAL notification through the classify -> page -> log path,
+  # synthesized rather than read from stdin, so a human can prove the pager
+  # actually reaches them before trusting it to an unattended halt. Referenced
+  # by PENDING-HUMAN-ACTIONS.md's webhook-never-configured row and
+  # session-start.sh's webhook probe -- both assume this flag exists.
+  local test_mode=0
+  if [ "${1:-}" = "--test" ]; then
+    test_mode=1
+    RT_RAW='{"title":"ratchet notify --test","message":"Manual test of the escalation webhook path (session-start.sh, PENDING-HUMAN-ACTIONS.md webhook-never-configured). If you see this, an unattended halt will reach you."}'
+  else
+    [ -t 0 ] || RT_RAW="$(cat 2>/dev/null || true)"
+  fi
   RT_RAW="${RT_RAW//$'\r'/}"
 
   _bootstrap || exit 0
@@ -228,6 +244,14 @@ main() {
   if [ -r "$RT_SELF_DIR/pipeline-event.sh" ]; then
     bash "$RT_SELF_DIR/pipeline-event.sh" notification \
       "class=$class" "paged=$paid" "title=$(_flatten "$title")" >/dev/null 2>&1 || true
+  fi
+
+  if [ "$test_mode" -eq 1 ]; then
+    case "$paid" in
+      paged) printf 'ratchet notify --test: PAGED. Check the destination for "ratchet notify --test".\n' ;;
+      nopage:no-webhook-configured) printf 'ratchet notify --test: NOT paged - RATCHET_WEBHOOK_URL is unset.\n' >&2 ;;
+      *) printf 'ratchet notify --test: NOT paged (%s). Fix that before trusting an unattended halt to reach you.\n' "$paid" >&2 ;;
+    esac
   fi
 
   exit 0
