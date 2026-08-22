@@ -4519,6 +4519,57 @@ class TestWindowsPathsAreCaseInsensitive(unittest.TestCase):
                          "a Tier 2b path that does not relativize is a Tier 2b path the "
                          "guard cannot recognise -- this one fails OPEN")
 
+    def _deny(self, func, path, win, lists=""):
+        """Run a deny matcher (rt_is_secret_path / rt_is_control_set /
+        rt_path_matches_list) with Windows detection on or off. Returns True on
+        a match (rc 0)."""
+        winenv = "export MSYSTEM=MINGW64 OSTYPE=msys; " if win else \
+                 "unset MSYSTEM; export OSTYPE=linux-gnu; "
+        script = (
+            '%s. "%s/ratchet.config.sh" >/dev/null 2>&1 || exit 97; '
+            '. "%s/hooklib.sh" >/dev/null 2>&1 || exit 97; %s %s %s'
+            % (winenv, HOOKS_PATH_STR, HOOKS_PATH_STR, lists, func,
+               shlex_quote(path))
+        )
+        r = subprocess.run([BASH, "-c", script], capture_output=True,
+                           text=True, timeout=60)
+        if r.returncode == 97:
+            raise unittest.SkipTest("hooklib/ratchet.config not present")
+        return r.returncode == 0
+
+    def test_a_case_variant_secret_is_denied_on_windows_only(self):
+        """On a case-insensitive mount `.ENV` and `server.PEM` ARE the secret;
+        matching them case-sensitively let one letter's case exfiltrate a key.
+        On POSIX they are genuinely different files and must NOT be folded."""
+        lists = ("export SECRET_PATTERNS=$'.env\\n.env.*\\nsecrets/\\n"
+                 "*.pem\\n*.key\\nid_rsa*'; ")
+        for path in (".ENV", "config/server.PEM", "id_RSA"):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    self._deny("rt_is_secret_path", path, win=True, lists=lists),
+                    "%s slipped past the secret deny on a case-insensitive "
+                    "mount" % path)
+                self.assertFalse(
+                    self._deny("rt_is_secret_path", path, win=False, lists=lists),
+                    "%s was folded into a secret on POSIX, where it is a "
+                    "different file" % path)
+
+    def test_a_case_variant_control_set_file_is_denied_on_windows(self):
+        """`.claude/hooks/Guard.sh` IS guard.sh on Windows; matching it
+        case-sensitively downgraded it to the CONFIRMABLE claude-dir rule, so a
+        human approval could overwrite the guard that decides what approvals
+        mean -- exactly what never-escalatable exists to forbid."""
+        lists = "export CONTROL_SET=$'guard.sh\\nscope-guard.sh\\nhooklib.sh'; "
+        self.assertTrue(
+            self._deny("rt_is_control_set", ".claude/hooks/Guard.sh", win=True,
+                       lists=lists),
+            "Guard.sh was not recognised as the control-set file guard.sh")
+        self.assertFalse(
+            self._deny("rt_is_control_set", ".claude/hooks/Guard.sh", win=False,
+                       lists=lists),
+            "control-set matching folded case on POSIX, where Guard.sh and "
+            "guard.sh are different files")
+
 
 
 def _brief_report(result, elapsed, tier, stopped_early):

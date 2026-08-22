@@ -435,10 +435,20 @@ RT_REL=""
 # NOTE: bash `case` globbing lets `*` cross `/`, so `src/*` matches `src/a/b.py`. That is
 # deliberately permissive: for a DENY list, over-matching is the safe direction.
 rt_path_matches_list() {
-  local p base e
+  local p base e fold=0
   [ -n "${2-}" ] || return 1
   rt_repo_rel_var "${1-}"; p="$RT_REL"
   base=${p##*/}
+  # On a case-insensitive mount (Windows), a case-variant path denotes the SAME
+  # file, so a DENY / governing-corpus list MUST match case-insensitively -- or
+  # every rule that runs through here (secrets, corpus, control set, forbidden
+  # artifacts) is bypassed by flipping one letter's case, and a control-set file
+  # written as `Guard.sh` even downgrades to the confirmable claude-dir rule.
+  # Over-matching a deny list is the safe direction. Allow-side matchers
+  # (partition globs, manifest) deliberately stay case-sensitive: over-matching
+  # THOSE would WIDEN writes, which is the unsafe direction.
+  [ "${RT_WINPATH:-0}" = "1" ] && fold=1
+  if [ "$fold" = "1" ]; then p=${p,,}; base=${base,,}; fi
   while IFS= read -r e; do
     e=${e//$'\r'/}
     e=${e#"${e%%[![:space:]]*}"}
@@ -446,6 +456,7 @@ rt_path_matches_list() {
     [ -n "$e" ] || continue
     case "$e" in '#'*) continue ;; esac
     e=${e//\\//}
+    [ "$fold" = "1" ] && e=${e,,}
     case "$e" in
       */)
         case "$p/" in "$e"*) return 0 ;; esac
