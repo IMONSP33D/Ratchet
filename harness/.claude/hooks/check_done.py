@@ -1253,7 +1253,8 @@ def check_escalations(ctx):
 # both parse. Reader and writer of this format changed together in this
 # commit: this is the reader-writer-drift fix (see ACTIVE-LESSONS.md itself).
 TEST_LINE_RE = re.compile(
-    r"^\s*[-*`]?\s*(?:named\s+test|test|asserted\s+by|assert)\s*[:=]\s*(.+)$", re.I)
+    r"^\s*(?:[-*>]\s+)?[`*_]*\s*(?:named\s+test|test|asserted\s+by|assert)"
+    r"[`*_]*\s*[:=]\s*(.+)$", re.I)
 
 
 def parse_lessons(ctx):
@@ -1286,12 +1287,17 @@ def parse_lessons(ctx):
     for l in lessons:
         body = "\n".join(l["body"])
         l["text"] = body
-        l["must_fix"] = bool(re.search(r"\bMUST-FIX\b", l.get("section") or "", re.I))
+        # must_fix is a property of the CATEGORY, and only when MUST-FIX is the
+        # category's actual name --- anchored at the start, not searched
+        # anywhere in the heading. A "## Watch --- demoted from MUST-FIX at
+        # consolidation" heading names a *watch* category and must not be gated
+        # as MUST-FIX just because it mentions its own provenance.
+        l["must_fix"] = (l.get("section") or "").strip().upper().startswith("MUST-FIX")
         test = ""
         for line in l["body"]:
             m = TEST_LINE_RE.match(line)
             if m:
-                test = m.group(1).strip().strip("`").strip()
+                test = m.group(1).strip().strip("`*_ ").strip()
                 break
         l["test"] = test
         mr = re.search(r"recurrence\s*[:=]\s*(\d+)", body, re.I)
@@ -1327,10 +1333,23 @@ def lessons_recurred_this_run(ctx):
             if nm:
                 names.add(nm)
     lessons, _ = parse_lessons(ctx)
+
+    def _tok_present(tok, text):
+        # Whole-token match: a milestone id is M<n>, so "M1" must not fire on
+        # "M11"/"M12" (no trailing digit) and must not fire mid-identifier (no
+        # preceding alnum). Substring matching here falsely blocked run M1 on
+        # any recurred-in note that merely mentioned M10-M19.
+        tok = (tok or "").strip()
+        if not tok:
+            return False
+        return re.search(r"(?<![A-Za-z0-9])" + re.escape(tok) + r"(?![0-9])",
+                         text) is not None
+
+    base = token.split("@")[0] if token else ""
     for l in lessons:
         for r in l["recurred_lines"]:
-            if token and token.split("@")[0] and \
-                    (token in r or (ctx.milestone() and ctx.milestone() in r)):
+            if base and (_tok_present(base, r)
+                         or (ctx.milestone() and _tok_present(ctx.milestone(), r))):
                 names.add(l["name"])
     return names
 

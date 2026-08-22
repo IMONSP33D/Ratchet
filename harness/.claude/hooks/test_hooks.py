@@ -3989,6 +3989,135 @@ class TestSeededLessonNamesResolve(NoRepoCase):
         self.assertEqual(wrong, [], "lesson -> class bindings drifted:\n  " + "\n  ".join(wrong))
 
 
+class TestLessonParserToleratesWriterDrift(unittest.TestCase):
+    """The lesson parser is the reader half of a reader-writer pair whose #1
+    historical failure is silent drift (reader-writer-drift, run-000). These
+    are the NEXT drift classes, each proven against the real parser in-process:
+
+      1. an `assert:` written as a markdown bullet and/or bold/blockquote still
+         binds its test (the shipped style is a bare or backtick-wrapped line;
+         the retro/consolidated templates render asserts inside bullets/tables);
+      2. a category is MUST-FIX only when MUST-FIX is the START of its name --- a
+         "## Watch --- demoted from MUST-FIX" heading is a WATCH category and
+         must not be gated;
+      3. a milestone id matches as a whole token --- run M1 is not "recurred"
+         by a note that merely mentions M10-M19.
+    """
+
+    @classmethod
+    def _cd(cls):
+        # Load check_done.py into a private namespace WITHOUT importing it as a
+        # module: the suite's own CONTRACT 0.2 forbids non-stdlib import lines,
+        # and a sibling-module import reads as one. exec of the source (read via
+        # the suite's encoding-safe `read`) keeps this test inside the same
+        # rules it enforces. __name__ is not "__main__", so main() never runs.
+        if getattr(cls, "_CD_NS", None) is None:
+            src = read(HOOKS / "check_done.py")
+            ns = {"__name__": "ratchet_check_done",
+                  "__file__": str(HOOKS / "check_done.py")}
+            exec(compile(src, str(HOOKS / "check_done.py"), "exec"), ns)
+
+            class _Mod(object):
+                def __init__(self, d):
+                    self.__dict__ = d
+            cls._CD_NS = _Mod(ns)
+        return cls._CD_NS
+
+    def _ctx(self, cd, root, lessons_text, run_active="M1"):
+        adev = os.path.join(root, ".agent-development")
+        os.makedirs(adev, exist_ok=True)
+        with open(os.path.join(adev, "ACTIVE-LESSONS.md"), "w",
+                  encoding="utf-8") as f:
+            f.write(lessons_text)
+        pipe = os.path.join(root, ".pipeline")
+        os.makedirs(pipe, exist_ok=True)
+        with open(os.path.join(pipe, "run-active"), "w", encoding="utf-8") as f:
+            f.write(run_active + "\n")
+        cfg = {
+            "ACTIVE_LESSONS": ".agent-development/ACTIVE-LESSONS.md",
+            "RUN_ACTIVE": ".pipeline/run-active",
+            "EVENTS_LOG": ".pipeline/events.jsonl",
+        }
+        return cd.Ctx(str(HOOKS), root, None, cfg, tier="intermediate")
+
+    def test_bulleted_and_emphasised_assert_lines_still_bind(self):
+        cd = self._cd()
+        styles = [
+            "`assert: TestBare`",
+            "- `assert: TestBullet`",
+            "* assert: TestStar",
+            "> `assert: TestQuote`",
+            "**assert:** TestBold",
+        ]
+        for i, style in enumerate(styles):
+            d = tempfile.mkdtemp(prefix="ratchet-lesson-")
+            try:
+                text = ("# Active lessons\n\n## MUST-FIX --- ways it broke\n\n"
+                        "### drift-lesson-%d\nA thing that must hold.\n%s\n" % (i, style))
+                ctx = self._ctx(cd, d, text)
+                lessons, _ = cd.parse_lessons(ctx)
+                self.assertEqual(len(lessons), 1, "style %r did not parse" % style)
+                self.assertTrue(lessons[0]["must_fix"])
+                self.assertTrue(
+                    lessons[0]["test"],
+                    "style %r bound no test -- an unbindable MUST-FIX is enforced "
+                    "against nothing" % style)
+                self.assertNotIn("`", lessons[0]["test"])
+                self.assertNotIn("*", lessons[0]["test"])
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+
+    def test_watch_category_mentioning_must_fix_is_not_gated(self):
+        cd = self._cd()
+        d = tempfile.mkdtemp(prefix="ratchet-lesson-")
+        try:
+            text = ("# Active lessons\n\n"
+                    "## Watch --- demoted from MUST-FIX at consolidation 001-005\n\n"
+                    "### watch-only-lesson\nKeep an eye on this; no test yet.\n")
+            ctx = self._ctx(cd, d, text)
+            lessons, _ = cd.parse_lessons(ctx)
+            self.assertEqual(len(lessons), 1)
+            self.assertFalse(
+                lessons[0]["must_fix"],
+                "a WATCH category was gated as MUST-FIX because its heading names "
+                "its own provenance -- an assert-less watch lesson now fails the gate")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_milestone_recurrence_match_is_whole_token(self):
+        cd = self._cd()
+        # A lesson noting it recurred in M11 must NOT flag run M1.
+        d = tempfile.mkdtemp(prefix="ratchet-lesson-")
+        try:
+            text = ("# Active lessons\n\n## MUST-FIX --- ways it broke\n\n"
+                    "### some-lesson\nBody.\n`assert: TestX`\n"
+                    "recurred-in: M11 a different milestone entirely\n")
+            ctx = self._ctx(cd, d, text, run_active="M1")
+            ctx.metrics = lambda: {"run": "M1"}
+            names = cd.lessons_recurred_this_run(ctx)
+            self.assertNotIn(
+                "some-lesson", names,
+                "run M1 was flagged as a recurrence by an M11 note -- substring "
+                "milestone matching falsely reds the gate")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        # Control: a genuine M1 recurrence note DOES flag it.
+        d = tempfile.mkdtemp(prefix="ratchet-lesson-")
+        try:
+            text = ("# Active lessons\n\n## MUST-FIX --- ways it broke\n\n"
+                    "### some-lesson\nBody.\n`assert: TestX`\n"
+                    "recurred-in: M1 the very same milestone\n")
+            ctx = self._ctx(cd, d, text, run_active="M1")
+            ctx.metrics = lambda: {"run": "M1"}
+            names = cd.lessons_recurred_this_run(ctx)
+            self.assertIn(
+                "some-lesson", names,
+                "a real M1 recurrence note stopped flagging M1 -- the boundary "
+                "match is too strict")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------
 # RUNNER - --smoke / --list / --json / -v / -k
 # --------------------------------------------------------------------------
