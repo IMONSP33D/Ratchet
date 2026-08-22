@@ -217,6 +217,18 @@ def sentence_count(text):
     return n if n else 1
 
 
+def line_count(text):
+    """Lines as `wc -l` and `head -n` count them: a trailing newline does NOT
+    add a phantom line. `text.split("\\n")` overcounts a newline-terminated file
+    by one, which made a file at EXACTLY the documented cap fail the line-cap
+    check while session-start's `head -n cap` injected it whole -- the two
+    disagreed about what "cap lines" means."""
+    if not text:
+        return 0
+    n = text.count("\n")
+    return n if text.endswith("\n") else n + 1
+
+
 def rel(ctx, path):
     try:
         return os.path.relpath(path, ctx.root).replace(os.sep, "/")
@@ -543,7 +555,7 @@ def check_length_caps(ctx):
             if not fn.endswith(".md") or fn.startswith("_"):
                 continue
             p = os.path.join(runs, fn)
-            n = len([l for l in read_text(p).split("\n")])
+            n = line_count(read_text(p))
             if n > cap:
                 out.append(viol("retro-line-cap", rel(ctx, p),
                                 "retro is %d lines (cap %d)" % (n, cap), fn))
@@ -551,7 +563,7 @@ def check_length_caps(ctx):
     al = ctx.path("ACTIVE_LESSONS")
     if al and os.path.isfile(al):
         cap = ctx.cap("CAP_ACTIVE_LESSONS_LINES")
-        n = len(read_text(al).split("\n"))
+        n = line_count(read_text(al))
         if n > cap:
             out.append(viol("active-lessons-line-cap", rel(ctx, al),
                             "ACTIVE-LESSONS is %d lines (cap %d); consolidate"

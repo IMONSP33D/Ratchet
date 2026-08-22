@@ -4156,6 +4156,30 @@ class TestLessonParserToleratesWriterDrift(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestLineCapCountsLikeHeadN(unittest.TestCase):
+    """check_narrative's line caps and session-start's `head -n cap` injection
+    must agree on what "cap lines" means. `text.split(chr(10))` overcounts a
+    newline-terminated file by one, so a file at EXACTLY the cap failed the gate
+    while head -n injected it whole."""
+
+    def _cn(self):
+        src = read(HOOKS / "check_narrative.py")
+        ns = {"__name__": "ratchet_check_narrative",
+              "__file__": str(HOOKS / "check_narrative.py")}
+        exec(compile(src, str(HOOKS / "check_narrative.py"), "exec"), ns)
+        return ns["line_count"]
+
+    def test_a_trailing_newline_is_not_a_phantom_line(self):
+        lc = self._cn()
+        cases = {"": 0, "a\n": 1, "a\nb\n": 2, "a\nb": 2, "a\nb\nc\n": 3}
+        for text, expected in cases.items():
+            self.assertEqual(lc(text), expected, repr(text))
+        at_cap = "".join("line%d\n" % i for i in range(100))
+        self.assertEqual(lc(at_cap), 100,
+                         "a 100-line file counted as %d; at cap 100 it would be "
+                         "rejected though head -n 100 injects it whole" % lc(at_cap))
+
+
 class TestRetroAndConsolidationCadence(unittest.TestCase):
     """Checks 18 and 19 are the learning loop's own gate. Both were satisfiable
     while their contract was violated:
