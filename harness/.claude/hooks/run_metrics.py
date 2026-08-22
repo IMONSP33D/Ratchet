@@ -627,7 +627,10 @@ def write_metrics(ctx, metrics, out=None):
 # ---------------------------------------------------------------------------
 # Metrics sidecars ($DEV_DIR/metrics/NNN-<milestone>.json) and --trend
 # ---------------------------------------------------------------------------
-SIDECAR_RE = re.compile(r"^(\d{3})-.+\.json$")
+# Run numbers are zero-padded but not capped at three digits (RUN_DOC_RE in
+# check_done.py is \d{3,}); a 4-digit sidecar must not silently vanish from
+# --trend.
+SIDECAR_RE = re.compile(r"^(\d{3,})-.+\.json$")
 
 TREND_COLUMNS = [
     ("escalation_requests", "esc"),
@@ -657,6 +660,12 @@ def load_sidecars(ctx, limit=None):
             with open(os.path.join(d, name), "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except (IOError, OSError, ValueError):
+            continue
+        # A sidecar whose top-level JSON is not an object (a truncated write that
+        # left a list or a bare string) must be skipped, not crash --trend: the
+        # docstring promises a broken sidecar never blocks, and downstream
+        # readers do `data.get(...)`.
+        if not isinstance(data, dict):
             continue
         rows.append((int(m.group(1)), name, data))
     rows.sort(key=lambda r: r[0])
