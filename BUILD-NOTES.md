@@ -13,7 +13,8 @@ but its known defects were real, and a template mass-produces whatever it ships 
 
 ## Verified in this build
 
-- **Self-test: 175 tests, 167 pass, 0 fail, 8 skip, ~100s.** Run `python3 .claude/hooks/test_hooks.py`.
+- **Self-test: 180 tests, 173 pass, 0 fail, 7 skip, ~80s.** Run `python3 .claude/hooks/test_hooks.py`.
+  (Test count grows with the suite; re-run to check the current numbers rather than trusting this line.)
 - **`install.sh` end-to-end** into two scratch repos: clean install, idempotent re-install,
   settings.json merge with backup, gitignore verification via `git check-ignore`, key
   generation at 0600, and uninstall (which restores settings and deliberately preserves your
@@ -51,10 +52,13 @@ Found by the self-test, i.e. the suite earned its keep before shipping:
    need work in `guard.sh`'s ship-flow section.
 3. **`gh` was absent in the sandbox**, so the ship flow's live merge path is unexercised.
    The refusals around it are tested; the success path is not.
-4. **8 skipped tests**, each skipping loudly rather than passing falsely: 2 need a TTY, 2 cover
-   an unimplemented `COMMIT_SCOPE_LINES` declaration rule, 1 needs a Windows host, and 3 are
-   test-harness gaps (notably `rt_work_seconds`, whose behaviour was verified by hand:
-   5000s elapsed with 4000s idle folds to 1000s of work).
+4. **7 skipped tests**, each skipping loudly rather than passing falsely: 2 need a TTY (a minted
+   approval, a disclosure record), 2 cover an unimplemented `COMMIT_SCOPE_LINES` declaration rule,
+   1 covers evidence-path auditing this build's `check_done.py` does not implement, and 2 are
+   test-harness gaps (`rt_work_seconds` not printing under the harness's own probe — its behaviour
+   was verified by hand instead: 5000s elapsed with 4000s idle folds to 1000s of work — and hooklib
+   exposing no `rt_is_compound`). None of the 7 is Windows-conditional; run the suite on Windows
+   before assuming that stays true.
 5. **The consent record is a record, not a control.** Branch protection is the control. The
    harness says this in three places because the source pipeline learned it the hard way.
 6. **Nothing here has run a real milestone yet.** The pipeline is proven in its predecessor;
@@ -71,7 +75,7 @@ milestone depends on them.
 
 | | |
 |---|---|
-| self-test | 177 tests, 170 pass, 0 fail, 7 skip |
+| self-test | 180 tests, 173 pass, 0 fail, 7 skip (grows with the suite; re-run for current numbers) |
 | install size | ~1.2 MB, of which `test_hooks.py` is 172 KB (13%) |
 | `guard.sh` per Bash tool call | ~64 ms |
 | `scope-guard.sh` per Edit/Write | ~58 ms |

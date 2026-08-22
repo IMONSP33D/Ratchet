@@ -21,6 +21,16 @@
 #   cleverer hash.
 #   The same reasoning applies to $CONTEXT_DIR (human-owned) and $SECRETS_DIR.
 #
+# WHY NotebookEdit IS NOT IN THE MATCHER (deliberately, do not "fix" this)
+#   scope-guard.sh's PreToolUse matcher covers NotebookEdit; this hook's does
+#   not, and the asymmetry is FROZEN (BUILD-CONTRACT.md §3; PIPELINE.md's
+#   event-wiring table). A stack pack's FORMAT_CMD is a source-code formatter
+#   built for text files; pointed at .ipynb's JSON with no guarantee of being
+#   notebook-aware, it can corrupt the file, which is worse than not
+#   formatting it. If a stack pack ever wants notebook formatting, that is a
+#   new opt-in command and a new matcher entry proposed through DECISIONS.md,
+#   not a widened `Edit|Write`.
+#
 # STATE FILES: none. This script writes nothing but the formatted file itself,
 # and only via the stack pack's FORMAT_CMD.
 # =============================================================================

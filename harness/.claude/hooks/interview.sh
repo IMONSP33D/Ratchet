@@ -60,7 +60,19 @@ done
 # the permission-prompt doctrine exists to avoid, arriving by a different door.
 # RATCHET_INTERVIEW_ASSUME_TTY=1 forces the prompt loops so they can be driven
 # from a fixture file in a test; it is a test seam, not a supported mode.
+#
+# AUTO_NONINTERACTIVE distinguishes THIS fallback from an operator passing
+# --non-interactive on purpose. Both write the same defaults -- DOMAIN_NAME
+# stays "none" and every domain-specific wall (FORBIDDEN_EXEC_TOKENS,
+# FORBIDDEN_ARTIFACTS, BANNED_READ_FILES, DOMAIN_NEVER_ESCALATABLE,
+# DOMAIN_LAWS, DOMAIN_REVIEW_LENS, DOMAIN_SECURITY_PASS) stays empty -- but
+# only one of them is a choice. Silently exiting 0 either way is a silent
+# disarm: nothing distinguished "no domain-specific protection, decided" from
+# "no domain-specific protection, because a terminal never happened to be
+# attached". See the loud warning below, near the write.
+AUTO_NONINTERACTIVE=0
 if [ ! -t 0 ] && [ "${RATCHET_INTERVIEW_ASSUME_TTY:-0}" != "1" ]; then
+  [ "$NONINTERACTIVE" = "1" ] || AUTO_NONINTERACTIVE=1
   NONINTERACTIVE=1
 fi
 
@@ -420,6 +432,23 @@ if ! bash -n "$TMPOUT" 2>/dev/null; then
   say "answer containing a stray quote. Your existing pack was NOT touched."
   say "The bad draft is at: $TMPOUT"
   exit 2
+fi
+
+if [ "$AUTO_NONINTERACTIVE" = "1" ]; then
+  rule
+  say "WARNING: no terminal was attached, so the interview was SKIPPED, not answered."
+  say "DOMAIN_NAME=none and every domain-specific wall (FORBIDDEN_EXEC_TOKENS,"
+  say "FORBIDDEN_ARTIFACTS, BANNED_READ_FILES, DOMAIN_NEVER_ESCALATABLE, DOMAIN_LAWS,"
+  say "DOMAIN_REVIEW_LENS, DOMAIN_SECURITY_PASS) is being written EMPTY. That is a"
+  say "valid choice when it IS a choice -- it is a silent disarm when it happens"
+  say "because nobody was there to answer. The harness-fixed control layer (guard.sh,"
+  say "the governing corpus, secrets protection, the ship gate) still applies; only"
+  say "this project's own dangerous edges go unwalled."
+  say ""
+  say "Re-run this interactively before trusting the pack, or set"
+  say "RATCHET_INTERVIEW_ASSUME_TTY=1 / pass --non-interactive yourself once you have"
+  say "confirmed empty walls are actually what you want."
+  rule
 fi
 
 if [ "$PRINT_ONLY" = "1" ]; then

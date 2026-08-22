@@ -363,6 +363,13 @@ and never-escalatable, because the files that decide what an approval means cann
 | `Stop` | — | `stop-gate.sh` | decision-block JSON |
 | `Notification` | — | `notify.sh` | never blocks |
 
+**`scope-guard.sh` covers `NotebookEdit`; `format.sh` deliberately does not** — this is not a gap, it
+is the asymmetry that keeps `format.sh` from ever running against a notebook. A stack pack's
+`FORMAT_CMD` is a source-code formatter (`ruff format`, `prettier`, …) built for text files; running it
+against `.ipynb`'s JSON has no guarantee of being notebook-aware, and a formatter that corrupts a file
+is worse than no formatter. The matcher is FROZEN (BUILD-CONTRACT.md §3) precisely so this stays a
+decision a future edit cannot widen by accident.
+
 **`guard.sh` covers, at minimum:** the domain pack's `FORBIDDEN_EXEC_TOKENS` and
 `FORBIDDEN_ARTIFACTS`; reads of `BANNED_READ_FILES`; writes to `SECRET_PATTERNS` paths; writes to the
 governing corpus and the control set; network-fetch smuggling; force flags; `--no-verify`; `git
