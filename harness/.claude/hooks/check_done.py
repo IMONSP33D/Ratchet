@@ -717,8 +717,20 @@ def check_win_rows(ctx):
         ev = norm_path(r["evidence"].strip().strip("`"))
         if not ev or ev in ("-", "n/a"):
             problems.append("%s names no evidence path" % r["win"])
-        elif not os.path.exists(os.path.join(ctx.root, ev)):
-            problems.append("%s: evidence missing on disk (%s)" % (r["win"], ev))
+        else:
+            evp = os.path.join(ctx.root, ev)
+            # Existence alone is vacuous: a 0-byte file, or one gitignored and
+            # never committed, satisfies `os.path.exists` yet proves nothing at
+            # HEAD (where the ship is judged) and is producible with `touch`.
+            if not os.path.isfile(evp):
+                problems.append("%s: evidence missing on disk (%s)" % (r["win"], ev))
+            elif os.path.getsize(evp) == 0:
+                problems.append("%s: evidence file is empty (%s) --- an existence "
+                                "check a `touch` satisfies is not proof" % (r["win"], ev))
+            elif not ctx.git("ls-files", "--error-unmatch", "--", ev):
+                problems.append("%s: evidence is not tracked by git (%s) --- a "
+                                "gitignored or uncommitted artifact does not exist "
+                                "at HEAD, where the ship is judged" % (r["win"], ev))
     # proof map: delegated to its own writer/reader
     script = ctx.sibling("proof_map.py")
     if not os.path.isfile(script):

@@ -4218,6 +4218,53 @@ class TestLineCapCountsLikeHeadN(unittest.TestCase):
                          "rejected though head -n 100 injects it whole" % lc(at_cap))
 
 
+class TestWinRowEvidenceIsNotVacuous(unittest.TestCase):
+    """check 3 accepted a WIN row's evidence on EXISTENCE alone, so a 0-byte
+    file or a gitignored/uncommitted one -- both producible with `touch` --
+    greened the ship criterion. Evidence must be a non-empty, git-tracked file
+    (it is judged at HEAD). Driven through the real CLI against build_good()."""
+
+    def setUp(self):
+        self.cd = TestLessonParserToleratesWriterDrift._cd()
+        self.script = str(HOOKS / "check_done.py")
+        self.evrel = "docs/evidence/M1/win-01.txt"
+
+    def _fixture(self):
+        d = tempfile.mkdtemp(prefix="ratchet-winrow-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self.cd.build_good(d)
+        return d
+
+    def _win_rows(self, d):
+        r = subprocess.run(
+            [sys.executable, self.script, "--repo-root", d, "--tier", "ship",
+             "--check", "win-rows"], capture_output=True, text=True, timeout=120)
+        line = [l for l in r.stdout.splitlines() if "win-rows" in l]
+        return r.returncode, (line[0] if line else r.stdout)
+
+    def test_the_good_fixture_passes(self):
+        rc, line = self._win_rows(self._fixture())
+        self.assertEqual(rc, 0, "build_good failed check 3:\n%s" % line)
+
+    def test_empty_evidence_is_refused(self):
+        d = self._fixture()
+        with open(os.path.join(d, self.evrel), "w", encoding="utf-8") as f:
+            f.truncate(0)
+        rc, line = self._win_rows(d)
+        self.assertEqual(rc, 1, "a 0-byte evidence file passed check 3:\n%s" % line)
+        self.assertIn("empty", line)
+
+    def test_untracked_evidence_is_refused(self):
+        d = self._fixture()
+        with open(os.path.join(d, self.evrel), "w", encoding="utf-8") as f:
+            f.write("real output\n")
+        subprocess.run(["git", "rm", "--cached", "-q", "--", self.evrel],
+                       cwd=d, capture_output=True, text=True, timeout=60)
+        rc, line = self._win_rows(d)
+        self.assertEqual(rc, 1, "an untracked evidence file passed check 3:\n%s" % line)
+        self.assertIn("not tracked", line)
+
+
 class TestRetroAndConsolidationCadence(unittest.TestCase):
     """Checks 18 and 19 are the learning loop's own gate. Both were satisfiable
     while their contract was violated:
