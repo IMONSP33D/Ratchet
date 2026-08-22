@@ -1242,8 +1242,18 @@ def check_escalations(ctx):
 # ---------------------------------------------------------------------------
 # 14  lessons  (includes the deep must-fix-recurred-with-green-assert check)
 # ---------------------------------------------------------------------------
+# Lesson entries are filed one level below their category: a `## <category>`
+# heading (e.g. "## MUST-FIX --- ...", "## Binding --- do not cut") groups
+# `### <name>` lesson headings underneath it. must_fix is a property of the
+# CATEGORY, not of an individual lesson's own body text --- a lesson's body
+# never repeats the word "MUST-FIX" itself (see ACTIVE-LESSONS.md, run-000).
+# The bound test is filed as a single-line, backtick-wrapped `` `assert: <id>` ``
+# inside the lesson body; TEST_LINE_RE tolerates an optional leading backtick
+# so that whole-line wrapping (the shipped style) and a bare `assert: <id>`
+# both parse. Reader and writer of this format changed together in this
+# commit: this is the reader-writer-drift fix (see ACTIVE-LESSONS.md itself).
 TEST_LINE_RE = re.compile(
-    r"^\s*[-*]?\s*(?:named\s+test|test|asserted\s+by|assert)\s*[:=]\s*(.+)$", re.I)
+    r"^\s*[-*`]?\s*(?:named\s+test|test|asserted\s+by|assert)\s*[:=]\s*(.+)$", re.I)
 
 
 def parse_lessons(ctx):
@@ -1251,24 +1261,32 @@ def parse_lessons(ctx):
     if not p or not os.path.isfile(p):
         return [], p
     text = read_text(p)
-    lessons, cur = [], None
+    lessons, cur, section = [], None, ""
     for i, line in enumerate(text.split("\n"), start=1):
-        m = re.match(r"^##\s+(.+?)\s*$", line)
-        if m:
+        h2 = re.match(r"^##\s+(.+?)\s*$", line)
+        if h2:
             if cur:
                 lessons.append(cur)
-            head = m.group(1)
+                cur = None
+            section = h2.group(1)
+            continue
+        h3 = re.match(r"^###\s+(.+?)\s*$", line)
+        if h3:
+            if cur:
+                lessons.append(cur)
+            head = h3.group(1)
             nm = re.match(r"^[`*]*([a-z][a-z0-9-]*)[`*]*", head)
             cur = {"heading": head, "name": nm.group(1) if nm else head,
-                   "line": i, "body": []}
-        elif cur is not None:
+                   "section": section, "line": i, "body": []}
+            continue
+        if cur is not None:
             cur["body"].append(line)
     if cur:
         lessons.append(cur)
     for l in lessons:
         body = "\n".join(l["body"])
         l["text"] = body
-        l["must_fix"] = bool(re.search(r"\bMUST-FIX\b", body + " " + l["heading"]))
+        l["must_fix"] = bool(re.search(r"\bMUST-FIX\b", l.get("section") or "", re.I))
         test = ""
         for line in l["body"]:
             m = TEST_LINE_RE.match(line)
@@ -1361,8 +1379,8 @@ def check_lessons(ctx):
     problems, warns = [], []
     for l in must:
         if not l["test"]:
-            problems.append("MUST-FIX lesson %r names no test (expected a "
-                            "`Test: <id>` line) --- a MUST-FIX with nothing "
+            problems.append("MUST-FIX lesson %r names no test (expected an "
+                            "`assert: <id>` line) --- a MUST-FIX with nothing "
                             "asserting it is a diary entry" % l["name"])
     rc, failing = failing_tests_from_verify(ctx)
     recurred = lessons_recurred_this_run(ctx)
@@ -1759,10 +1777,15 @@ def build_good(root):
         _w(base + "-evidence.txt", "git diff --stat\n")
         _w(base + "-clear.md", "Spot-checked the diff stat against the summary.\n"
                                "CLEAR\n")
+    # Real shipped shape: a `## MUST-FIX` category heading groups `### <name>`
+    # lesson headings, each with a backtick-wrapped `` `assert: <id>` `` line ---
+    # see ACTIVE-LESSONS.md. This fixture must track that format exactly, or
+    # this selftest is reader-writer-drift against its own production payload.
     _w(os.path.join(root, ".agent-development", "ACTIVE-LESSONS.md"),
-       "# Active lessons\n\n## dispatch-glob-missing-degrades-gate\n"
-       "Status: MUST-FIX\nRecurrence: 3\n"
-       "Test: tests/test_gate.py::test_head_match\n")
+       "# Active lessons\n\n## MUST-FIX --- the process has failed these ways\n\n"
+       "### dispatch-glob-missing-degrades-gate\n"
+       "The dispatch glob must degrade the gate when it is missing.\n"
+       "`assert: tests/test_gate.py::test_head_match`\n")
     _w(os.path.join(root, ".agent-development", "PENDING-HUMAN-ACTIONS.md"),
        "# Pending\n\n## rotate-escalation-key\nOwner: human\n")
     _w(os.path.join(root, ".pipeline", "escalations", "ledger.jsonl"),
