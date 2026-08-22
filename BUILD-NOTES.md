@@ -1,4 +1,4 @@
-# Ratchet 1.2.0 — build notes
+# Ratchet 1.2.1 — build notes
 
 What this is, what was verified, and what was not. Read the honest-limitations section
 before you trust anything here in anger.
@@ -216,3 +216,56 @@ of filtering, which made per-class timing impossible. A bare positional now filt
 | install wall time | ~230s | **28s** |
 | `.context/` files / lines | 7 / 2107 | **3 / ~125** |
 | default verification | full, 177 tests | quick, 50 tests |
+
+
+---
+
+# 1.2.1 — the Windows failure was a real bug, and the report was useless
+
+## The bug: case-insensitive paths
+
+`rt_repo_rel_var` stripped the repo root off a path with an EXACT string compare. Windows
+filesystems are case-insensitive, and the four sources of a path here — `CLAUDE_PROJECT_DIR`,
+`git rev-parse`, `BASH_SOURCE`, and the tool payload — do not agree on casing for the same
+directory. When they disagreed the strip silently failed, the path stayed ABSOLUTE, and every
+downstream comparison misfired.
+
+Two consequences, and the second is the serious one:
+
+- **Fail closed, visible:** `.pipeline/notes.md` no longer matched its own exemption, so the agent
+  was refused its own scratch directory. This is what the failing tests reported.
+- **Fail OPEN, invisible:** `.context/SPEC.md` no longer matched the governing corpus either. A
+  Tier 2b path the guard cannot recognise is a Tier 2b path the guard cannot protect. Nothing
+  reported this, because nothing was blocked.
+
+Fixed: on Windows-form paths the prefix compare is case-insensitive, and the slice is taken from
+the original string so real casing survives. POSIX paths still compare exactly — `/home/me/Repo`
+and `/home/me/repo` are genuinely different directories and folding them would be a new bug.
+Regression tests cover both directions, including the fail-open case.
+
+## Failing gracefully
+
+The install ran for 414 seconds and then printed a wall of tracebacks. Three fixes:
+
+- **`--max-seconds`**: the run stops BETWEEN tests when the budget is spent. Never inside one —
+  aborting mid-setUp reports tests that never ran as errors, and a self-test that lies about the
+  gates is worse than no self-test. The installer sets 120s on POSIX, 420s on Windows.
+- **`--brief`**: failures are grouped by test class with the first two examples and a LIKELY CAUSE
+  line, instead of raw tracebacks. It recognises the three common shapes: a missing bash (host, not
+  gates), the scratch-directory refusal (path normalisation, not policy), and failures spread
+  across most of the suite (one shared dependency, not many broken gates).
+- **Windows expectations up front**: `--verify full` on Windows warns that it takes ~25 minutes and
+  that this is process-spawn cost, not the gates.
+
+## Why Windows is 16x slower
+
+Measured: `--quick` is 25s on Linux and 414s under Git-Bash. The suite is almost entirely process
+spawns (each test drives real hooks through real bash), and Windows process creation is roughly an
+order of magnitude more expensive, before antivirus. Nothing is wrong; the work is real. The
+budget exists so you find that out in two minutes instead of seven.
+
+## Also fixed
+
+- A bare positional passed to `test_hooks.py` (e.g. `--max-seconds 8`) was swallowed as a test-name
+  pattern, silently running zero tests. Flag values are now skipped.
+- Subtest failures reported as `_SubTest` in the brief report instead of their real class.

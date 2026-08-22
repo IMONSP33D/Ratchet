@@ -54,7 +54,7 @@ set -uo pipefail
 # NOT set -e. A failed optional step must be REPORTED, not silently abort a
 # half-finished install. Every step that matters checks its own exit status.
 
-RT_INSTALLER_VERSION="1.2.0"
+RT_INSTALLER_VERSION="1.2.1"
 # Install verification tier: quick (default, ~25s) | full (~95s) | smoke (~1s) | none.
 # Quick is every security wall and meta-invariant. Full is the whole suite and is
 # what you run once, and after any control-layer change.
@@ -1819,6 +1819,24 @@ case "$VERIFY_TIER" in
   none)  VERIFY_FLAG="" ;;
   *) warn "unknown --verify tier '$VERIFY_TIER'; using quick."; VERIFY_TIER=quick; VERIFY_FLAG="--quick" ;;
 esac
+
+# Windows spawns processes roughly an order of magnitude slower than POSIX, and
+# this suite is almost entirely process spawns: a tier that is 25s on Linux has
+# been measured at 414s under Git-Bash. Budget the step so nobody watches a
+# spinner for seven minutes wondering whether it hung, and say the number up
+# front rather than after.
+VERIFY_BUDGET="${RATCHET_VERIFY_BUDGET:-120}"
+IS_WINDOWSISH=0
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) IS_WINDOWSISH=1 ;; esac
+if [ "$IS_WINDOWSISH" = "1" ]; then
+  VERIFY_BUDGET="${RATCHET_VERIFY_BUDGET:-420}"
+  if [ "$VERIFY_TIER" = "full" ]; then
+    warn "the full suite on Windows is very slow (~25 min: process spawn, not the gates)."
+    say "        Consider --verify quick here, and run the full suite once when you"
+    say "        can leave it. Override the cap with RATCHET_VERIFY_BUDGET=<seconds>."
+  fi
+fi
+[ "$VERIFY_TIER" = "none" ] || VERIFY_FLAG="$VERIFY_FLAG --brief --max-seconds $VERIFY_BUDGET"
 if [ -f "$TARGET/.claude/hooks/test_hooks.py" ]; then
     # BOUND IT. The hook suite is large and grows; on a slow host it can run for
     # minutes. An installer that hangs with no output is indistinguishable from
@@ -1860,11 +1878,23 @@ if [ -f "$TARGET/.claude/hooks/test_hooks.py" ]; then
       printf '  %s%s  INSTALL VERIFICATION FAILED%s\n\n' "$C_R" "$C_B" "$C_0"
       printf '  test_hooks.py exited %s. The harness is installed but at least one\n' "$VERIFY_RC"
       printf '  gate does not behave the way its own tests say it should.\n\n'
-      printf '%s\n' "$VOUT" | tail -30 | sed 's/^/    /'
+      # --brief already produced a human-sized, grouped summary with a likely
+      # cause. Print THAT. A wall of Python tracebacks tells a person nothing
+      # they can act on, and it buries the one line that would have.
+      VSUM="$(printf '%s\n' "$VOUT" | sed -n '/WHAT FAILED/,$p')"
+      if [ -n "$VSUM" ]; then
+        printf '%s\n' "$VSUM" | sed 's/^/  /'
+      else
+        printf '%s\n' "$VOUT" | tail -20 | sed 's/^/    /'
+      fi
+      if printf '%s' "$VOUT" | grep -q 'budget spent\|max-seconds'; then
+        printf '\n  The run also hit its time budget, so some tests never ran. That is a\n'
+        printf '  speed limit, not a verdict: raise it with RATCHET_VERIFY_BUDGET=<seconds>.\n'
+      fi
       printf '\n  Do not start a milestone on a red suite. A gate whose test fails is a\n'
       printf '  gate you cannot reason about, and the whole value of this harness is\n'
       printf '  that a refusal means something. Re-run the suite yourself:\n'
-      printf '      cd %s && %s .claude/hooks/test_hooks.py\n' "$TARGET" "$PY"
+      printf '      cd %s && %s .claude/hooks/test_hooks.py --quick -v\n' "$TARGET" "$PY"
       rt_rule "$C_R"
       printf '\n'
     fi

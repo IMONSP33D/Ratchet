@@ -130,7 +130,7 @@ $ErrorActionPreference = 'Continue'   # NOT Stop: a failed optional step is
                                       # reported, never allowed to abort a
                                       # half-finished install silently.
 
-$RtInstallerVersion = "1.2.0"
+$RtInstallerVersion = "1.2.1"
 $script:Warnings    = 0
 $script:MissingFiles = New-Object System.Collections.Generic.List[string]
 $script:HostFatal   = $false

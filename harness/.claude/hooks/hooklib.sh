@@ -368,12 +368,36 @@ rt_repo_rel_var() {
   p=${p//\\//}
   root=${root//\\//}
   # C:/x -> /c/x on both sides, so the two forms Git-Bash emits for the same path compare equal.
+  # Was either side handed to us in Windows drive form, or are we on a Windows
+  # shell at all? Either means the filesystem underneath is case-insensitive.
+  RT_WINPATH=0
+  case "$p"    in [A-Za-z]:/*) RT_WINPATH=1 ;; esac
+  case "$root" in [A-Za-z]:/*) RT_WINPATH=1 ;; esac
+  case "${OSTYPE:-}${MSYSTEM:-}" in *[Mm]sys*|*[Cc]ygwin*|*[Mm]ingw*) RT_WINPATH=1 ;; esac
   case "$p"    in [A-Za-z]:/*) seg=${p%%:*};    p="/${seg,,}${p#*:}" ;; esac
   case "$root" in [A-Za-z]:/*) seg=${root%%:*}; root="/${seg,,}${root#*:}" ;; esac
   while [ "$p" != "${p//\/\//\/}" ]; do p=${p//\/\//\/}; done
   case "$p" in
     "$root"/*) p=${p#"$root"/} ;;
     "$root")   p="." ;;
+    *)
+      # Windows filesystems are CASE-INSENSITIVE, and the four sources of a path
+      # here -- CLAUDE_PROJECT_DIR, git rev-parse, BASH_SOURCE, and the tool
+      # payload -- do not agree on casing for the same directory. When they
+      # disagreed, the prefix strip silently failed, the path stayed ABSOLUTE,
+      # and every downstream comparison misfired: .pipeline/ stopped matching its
+      # own exemption, so the agent was refused its own scratch directory.
+      # Compare case-insensitively on Windows-ish paths ONLY -- POSIX paths are
+      # genuinely case-sensitive and must keep comparing exactly. The slice is
+      # taken from the ORIGINAL string, so the real casing survives.
+      if [ "${RT_WINPATH:-0}" = "1" ]; then
+        local lp lr
+        lp=${p,,}; lr=${root,,}
+        case "$lp" in
+          "$lr"/*) p=${p:$(( ${#root} + 1 ))} ;;
+          "$lr")   p="." ;;
+        esac
+      fi ;;
   esac
   case "$p" in /*) lead="/" ;; esac
   case $- in *f*) hadf=1 ;; esac

@@ -244,6 +244,16 @@ def _resolve_bash():
 
 
 BASH = _resolve_bash()
+MAX_SECONDS = 0.0        # 0 = no budget; set by --max-seconds
+RUN_STARTED = [0.0]
+
+
+def shlex_quote(s):
+    import shlex as _s
+    return _s.quote(s)
+
+
+HOOKS_PATH_STR = str(pathlib.Path(__file__).resolve().parent)
 
 def smoke(fn):
     """Mark a test as part of the fast availability probe (--smoke)."""
@@ -4014,6 +4024,7 @@ QUICK_CLASSES = (
 )
 
 
+
 def build_suite(smoke_only=False, pattern=None, quick_only=False):
     loader = unittest.TestLoader()
     loader.sortTestMethodsUsing = None  # keep declaration order; setUp cost dominates
@@ -4035,8 +4046,20 @@ def build_suite(smoke_only=False, pattern=None, quick_only=False):
     return out
 
 
+class _Deadline(Exception):
+    """Raised to stop a run that has blown its time budget."""
+
+
 class _Result(unittest.TextTestResult):
     """Collects a per-test record for --json alongside the usual output."""
+
+    def stopTest(self, test):
+        unittest.TextTestResult.stopTest(self, test)
+        if MAX_SECONDS and (time.time() - RUN_STARTED[0]) > MAX_SECONDS:
+            # Stop BETWEEN tests, never inside one. Aborting mid-setUp reports
+            # tests that never ran as ERRORS, which is a lie about the gates --
+            # and a self-test that lies is worse than no self-test.
+            self.stop()
 
     def __init__(self, *a, **kw):
         unittest.TextTestResult.__init__(self, *a, **kw)
@@ -4157,6 +4180,132 @@ class TestBashIsResolvedByProbe(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestWindowsPathsAreCaseInsensitive(unittest.TestCase):
+    """A real Windows install refused the agent its own .pipeline/ scratch.
+
+    Cause: CLAUDE_PROJECT_DIR, git rev-parse, BASH_SOURCE and the tool payload do
+    not agree on the CASING of the same directory, and Windows filesystems do not
+    care. The prefix strip in rt_repo_rel_var compared exactly, silently failed,
+    and left the path ABSOLUTE -- so `.pipeline/notes.md` no longer matched its own
+    exemption (fail closed, visible) and `.context/SPEC.md` no longer matched the
+    governing corpus (fail OPEN, invisible). The second one is why this is a wall
+    and not a nuisance.
+    """
+
+    def _rel(self, root, path):
+        script = (
+            '. "%s/ratchet.config.sh" >/dev/null 2>&1 || exit 97; '
+            '. "%s/hooklib.sh" >/dev/null 2>&1 || exit 97; '
+            'REPO_ROOT=%s; rt_repo_rel_var %s; printf "%%s" "$RT_REL"'
+            % (HOOKS_PATH_STR, HOOKS_PATH_STR, shlex_quote(root), shlex_quote(path))
+        )
+        r = subprocess.run([BASH, "-c", script], capture_output=True, text=True, timeout=60)
+        if r.returncode == 97:
+            raise unittest.SkipTest("hooklib/ratchet.config not present")
+        return r.stdout.strip()
+
+    def test_windows_paths_relativize_regardless_of_case(self):
+        for root, path in (
+            ("/c/users/i/temp/rt-x", "C:/Users/i/Temp/rt-x/.pipeline/notes.md"),
+            ("C:/Users/i/Temp/rt-x", "c:/users/i/temp/rt-x/.pipeline/notes.md"),
+            ("C:/Users/I/Temp/RT-X", "C:\\Users\\i\\temp\\rt-x\\.pipeline\\notes.md"),
+        ):
+            with self.subTest(root=root, path=path):
+                self.assertEqual(
+                    self._rel(root, path), ".pipeline/notes.md",
+                    "a case difference left the path absolute; on Windows that refuses the "
+                    "agent its own scratch and, worse, stops .context/ matching the "
+                    "governing corpus at all")
+
+    def test_negative_posix_paths_stay_case_sensitive(self):
+        """The failing input: on a real POSIX box /home/me/Repo and /home/me/repo
+        are DIFFERENT directories and must not be folded together."""
+        got = self._rel("/home/me/Repo", "/home/me/repo/.pipeline/x.md")
+        self.assertNotEqual(
+            got, ".pipeline/x.md",
+            "case-insensitive matching leaked onto POSIX, where it is wrong: two "
+            "genuinely different directories were treated as one")
+
+    def test_the_governing_corpus_still_matches_under_mixed_case(self):
+        got = self._rel("C:/Users/I/Temp/RT-X", "C:\\Users\\i\\temp\\rt-x\\.context\\SPEC.md")
+        self.assertEqual(got, ".context/SPEC.md",
+                         "a Tier 2b path that does not relativize is a Tier 2b path the "
+                         "guard cannot recognise -- this one fails OPEN")
+
+
+
+def _brief_report(result, elapsed, tier, stopped_early):
+    """One screen a human can act on: what failed, grouped by cause, and the
+    single most likely explanation. The traceback wall is still available with
+    -v; it is just no longer the FIRST thing anybody sees."""
+    out = []
+    bad = list(result.failures) + list(result.errors)
+    if not bad:
+        return ""
+    groups = {}
+    for test, tb in bad:
+        last = [l for l in (tb or "").strip().splitlines() if l.strip()]
+        reason = last[-1] if last else "?"
+        reason = reason.split(":", 1)[-1].strip() if ":" in reason else reason
+        # A subtest reports as _SubTest; the useful name is its parent case.
+        cls = type(test).__name__
+        name = getattr(test, "_testMethodName", str(test))
+        parent = getattr(test, "test_case", None)
+        if parent is not None:
+            cls = type(parent).__name__
+            name = getattr(parent, "_testMethodName", name)
+            params = str(test).split("[", 1)
+            if len(params) > 1:
+                name = "%s [%s" % (name, params[1])
+        groups.setdefault(cls, []).append((name, reason))
+    out.append("")
+    out.append("  WHAT FAILED (%d of %d, grouped by test class)" % (len(bad), result.testsRun))
+    for cls, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        out.append("    %-44s %d" % (cls, len(items)))
+        for name, reason in items[:2]:
+            out.append("        %s" % name[:70])
+            out.append("          %s" % reason[:110])
+        if len(items) > 2:
+            out.append("        ... and %d more in this class" % (len(items) - 2))
+    # the one diagnosis worth volunteering
+    blob = " ".join(r for g in groups.values() for _, r in g).lower()
+    hint = ""
+    if "execvpe" in blob or "no such file or directory" in blob and "bash" in blob:
+        hint = ("Every failure names a missing bash. This is the host, not the gates: "
+                "set RATCHET_BASH to a real bash and re-run.")
+    elif ".pipeline/" in blob and "is not false" in blob:
+        hint = ("The scope guard is refusing the agent's own scratch directory. That is a "
+                "path-normalisation problem (casing or separators), not a policy problem.")
+    elif len(groups) > 6:
+        hint = ("Failures are spread across most of the suite, which usually means one "
+                "shared dependency is broken (bash, python, or jq) rather than many gates.")
+    if hint:
+        out.append("")
+        out.append("  LIKELY CAUSE")
+        for line in _wrap(hint, 74):
+            out.append("    " + line)
+    if stopped_early:
+        out.append("")
+        out.append("  NOTE: the run stopped at its time budget, so tests after this point")
+        out.append("        never ran. Raise it with --max-seconds N, or run --verify full")
+        out.append("        when you have time.")
+    out.append("")
+    out.append("  Full detail:  python3 .claude/hooks/test_hooks.py %s -v" % tier)
+    return "\n".join(out)
+
+
+def _wrap(s, w):
+    words, line, out = s.split(), "", []
+    for x in words:
+        if len(line) + len(x) + 1 > w:
+            out.append(line); line = x
+        else:
+            line = (line + " " + x).strip()
+    if line:
+        out.append(line)
+    return out
+
+
 def main(argv=None):
 
     if os.environ.get("RATCHET_QUIET") != "1":
@@ -4166,6 +4315,16 @@ def main(argv=None):
     want_list = "--list" in argv
     smoke_only = "--smoke" in argv
     quick_only = "--quick" in argv
+    brief = "--brief" in argv
+    global MAX_SECONDS
+    if "--max-seconds" in argv:
+        i = argv.index("--max-seconds")
+        if i + 1 < len(argv):
+            try:
+                MAX_SECONDS = float(argv[i + 1])
+            except ValueError:
+                pass
+    RUN_STARTED[0] = time.time()
     verbose = "-v" in argv or "--verbose" in argv
     pattern = None
     if "-k" in argv:
@@ -4174,8 +4333,18 @@ def main(argv=None):
             pattern = argv[i + 1]
     else:
         # A bare positional (a class or test name) filters, rather than being
-        # ignored while the whole suite runs anyway.
+        # ignored while the whole suite runs anyway. Skip the VALUE of any
+        # flag that takes one -- otherwise `--max-seconds 8` reads 8 as a test
+        # name pattern, matches nothing, and silently runs zero tests.
+        VALUE_FLAGS = ("-k", "--max-seconds")
+        skip_next = False
         for a in argv:
+            if skip_next:
+                skip_next = False
+                continue
+            if a in VALUE_FLAGS:
+                skip_next = True
+                continue
             if not a.startswith("-"):
                 pattern = a
                 break
@@ -4196,6 +4365,13 @@ def main(argv=None):
         stream=stream, verbosity=2 if verbose else 1, resultclass=_Result
     )
     result = runner.run(suite)
+    if brief:
+        stopped_early = bool(MAX_SECONDS and (time.time() - RUN_STARTED[0]) > MAX_SECONDS)
+        rep = _brief_report(result, time.time() - started, 
+                            '--smoke' if smoke_only else ('--quick' if quick_only else ''),
+                            stopped_early)
+        if rep:
+            sys.stderr.write(rep + '\n')
     elapsed = round(time.time() - started, 2)
 
     if want_json:
