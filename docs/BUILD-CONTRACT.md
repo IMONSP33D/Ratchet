@@ -51,9 +51,11 @@ and note it in your report — do not redefine anything that is listed.
       hooklib.sh guard.sh scope-guard.sh stop-gate.sh subagent-gate.sh
       red-gate.sh session-start.sh dispatch-baseline.sh checkpoint-evidence.sh
       gc-prune.sh format.sh notify.sh pipeline-event.sh
-      escalation-lib.sh escalate.sh approve.sh
+      escalation-lib.sh escalate.sh approve.sh interview.sh
       check_done.py check_narrative.py proof_map.py run_metrics.py
+      esc_payload.py
       test_hooks.py
+    commit-template.txt         # release-commit template; wired via commit.template
   .context/                     # HUMAN-OWNED contracts (Tier 2b) — exactly three
     SPEC.md MILESTONES.md DECISIONS.md
     archive/decisions/
@@ -320,7 +322,16 @@ and dies at gate closure.
 secrets/keys/`.env` · force push · push or commit to `BASE_BRANCH` outside the ship flow ·
 the governing corpus (`GOVERNING_CORPUS`) · the control set:
 `settings.json guard.sh scope-guard.sh hooklib.sh escalation-lib.sh approve.sh ratchet.config.sh`
-Nothing lifts these. Not an approval, not a card, not a domain pack.
+
+**Plus the harness's own state stores**, which are the control set seen from the other side — an
+approval means nothing if the agent can edit the thing the approval is written into, or the thing
+that defines the approval's own scope: `escalation-store-write` and `escalation-state-write`
+(`$ESCALATIONS_DIR` — the ledger and the approval records), `dispatch-store-write` (`$DISPATCH_DIR`
+— the partition globs the scope check reads and the baselines the gates attribute with), and
+`approve-script-invocation` (invoking a control-set file *is* a control-set operation).
+
+Nothing lifts any of these. Not an approval, not a card, not a domain pack. The canonical list is
+`ESC_NEVER_CORE` in `escalation-lib.sh`; this section and that variable change in the same commit.
 
 ### 5.7 Ship flow (two factors + a record)
 1. Affirmative selection on an `AskUserQuestion` Ship Prompt card.

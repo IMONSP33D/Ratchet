@@ -200,12 +200,19 @@ costs you a merge per release, indefinitely, and the merges get harder as the fi
 
 If, having read that, you still must diverge:
 
-1. **Put the divergence in one named file.** `.claude/hooks/local-patch.sh`, sourced by
-   `domain.config.sh` — which is USER-class and therefore never touched by the updater. Prefer
-   *configuration* over *code*: `DOMAIN_NEVER_ESCALATABLE`, `FORBIDDEN_EXEC_TOKENS`,
-   `SECURITY_BOUNDARY_FILES` and the rest of the domain pack exist precisely so that most
-   divergences never need to touch a harness file at all. A divergence you can express as a domain
-   pack value is not a fork.
+1. **Put the divergence in the domain pack, because that is the mechanism that exists.**
+   `.claude/hooks/domain.config.sh` is USER-class: the updater preserves it and never overwrites it,
+   and it is the one file under `.claude/` a human owns. Prefer *configuration* over *code* —
+   `DOMAIN_NEVER_ESCALATABLE`, `FORBIDDEN_EXEC_TOKENS`, `SECURITY_BOUNDARY_FILES`,
+   `BANNED_READ_FILES` and the rest of the pack exist precisely so most divergences never touch a
+   harness file at all. **A divergence you can express as a domain pack value is not a fork**, and
+   it survives every upgrade for free.
+
+   If it genuinely cannot be expressed as configuration, then you are editing a harness file and the
+   updater will classify it as locally modified — which is the billing described in step 3. There is
+   no separate escape-hatch file: an earlier draft of this document described a `local-patch.sh`
+   sourced by the domain pack, and that mechanism was never built at either end. Do not go looking
+   for it.
 2. **Record it in `DECISIONS.md` with a name.** Kebab-case, 2–5 words, stating the problem
    (CONTRACT §6): `egress-wall-required-by-policy`, not `local-changes`. The entry carries
    **Default/config.**, **Affected.**, and — this one is the point — *what would have to become true

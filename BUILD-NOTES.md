@@ -1,3 +1,54 @@
+# Ratchet 1.2.2 — build notes
+
+## 1.2.2 — what changed
+
+- **The dispatch attribution store is now walled (audit F1, HIGH).** `.pipeline/dispatch/`
+  holds the partition globs `scope-guard.sh` checks writes against and the baselines the
+  SubagentStop gates attribute work with. Both sat in agent-writable scratch: only
+  `.pipeline/escalations/**` was denied. Reproduced before the fix as *blocked write → agent
+  widens its own glob to `**` → identical write allowed*. Now refused at four layers
+  (settings deny, `guard.sh` by effect, `scope-guard.sh` in tier2b, `ESC_NEVER_CORE`) under
+  the new never-escalatable rule id `dispatch-store-write`. `dispatch-baseline.sh` remains
+  the sanctioned writer and is unaffected.
+- **The metrics spine was reconnected (two independent breaks, both HIGH).** (a) `run_metrics.py`
+  called a hooklib function `rt_run_token` **that has never existed in the tree**, silently fell
+  back to a different token format, and compared it to what `pipeline-event.sh` actually stamps —
+  so every event of every real run was discarded as another run's (measured: 15 events in,
+  `events_this_run: 0`). (b) `COUNTER_SPECS` named a canonical vocabulary (`gate_block`,
+  `refusal`, `verify`) that **no script emits**. Either break alone made every counter render
+  `null`. Both were invisible because the selftest fixtures spoke the reader's dialect; the
+  fixtures now speak the writer's.
+- **Speed is measured for the first time.** New `timing` block: per-stage seconds, per-dispatch
+  latency, longest gap and what preceded it, and **human wait as its own stage** — the number the
+  work budget deliberately folds out and which nothing could previously see. Derived purely from
+  existing event timestamps; no new instrumentation.
+- **`install.ps1` did not parse, so the Windows installer had never been able to run at all.**
+  `Get-ShellVar` interpolated a bash `"${NAME:-}"` default-expansion inside a double-quoted
+  PowerShell string, where `$Name:` is read as a namespaced variable reference. PowerShell parses
+  an entire file before executing any of it, so this single line was fatal to the whole script.
+  Now built by concatenation. This is why the "never executed on Windows" caveat below mattered
+  more than it looked.
+- **`install.sh --verify none` ran the *slowest* verification instead of none** — it fell through
+  to the same empty flag as `full` and then skipped the budget cap. `none` now sets `RUN_VERIFY=0`.
+- **`install.ps1` gained `-Verify quick|smoke|full|none`** (default `quick`, matching bash) with
+  `--brief`/`--max-seconds`. It previously ran the full suite unconditionally and uncapped — the
+  ~25-minute path the bash installer explicitly refuses to inflict on Windows.
+- **A release-commit template** at `.claude/commit-template.txt`, wired repo-locally via
+  `commit.template` by both installers, never overwriting an existing one. Format:
+  `Version X.X.X: <at most three sentences>`. It fills the editor for human release commits only;
+  the agent's per-cycle Conventional Commits use `git commit -m`, which never opens an editor.
+- **A version-consistency test.** VERSION, `install.sh`, `install.ps1` and `ratchet.config.sh`
+  each hardcode the version independently, with nothing binding them. Bumping only VERSION was
+  demonstrated to produce an install reporting three different versions to three readers — one of
+  them the agent's own session context. `TestVersionIsConsistentEverywhere` now fails on any
+  divergence.
+- **Doctrine corrected against the code it describes:** `PIPELINE.md`'s "23 scripts" was wrong and
+  hid two real files (`interview.sh`, `esc_payload.py` — the latter mentioned in zero markdown
+  files bundle-wide); `UPGRADING.md` documented a `local-patch.sh` escape hatch that exists nowhere
+  at either end; `BUILD-CONTRACT.md` §5.6 read as an exhaustive never-escalatable list while being
+  four rule ids short; `DISPATCH_DIR` was absent from the frozen-name selftest despite a
+  never-escalatable rule now depending on it.
+
 # Ratchet 1.2.1 — build notes
 
 What this is, what was verified, and what was not. Read the honest-limitations section
@@ -13,8 +64,9 @@ but its known defects were real, and a template mass-produces whatever it ships 
 
 ## Verified in this build
 
-- **Self-test: 180 tests, 173 pass, 0 fail, 7 skip, ~80s.** Run `python3 .claude/hooks/test_hooks.py`.
-  (Test count grows with the suite; re-run to check the current numbers rather than trusting this line.)
+- **Self-test: 210 tests, 203 pass, 0 fail, 7 skip, ~100s** on Linux/CPython 3.10.
+  Run `python3 .claude/hooks/test_hooks.py`. (The count grows with the suite; re-run rather than
+  trusting this line. The seven skips are itemised below and every one is honest.)
 - **`install.sh` end-to-end** into two scratch repos: clean install, idempotent re-install,
   settings.json merge with backup, gitignore verification via `git check-ignore`, key
   generation at 0600, and uninstall (which restores settings and deliberately preserves your
@@ -44,10 +96,13 @@ Found by the self-test, i.e. the suite earned its keep before shipping:
 
 ## Honest limitations
 
-1. **`install.ps1` has never been executed on Windows.** No PowerShell in the build sandbox.
-   It is structurally validated (balanced blocks, no BOM, LF-safe writes, 5.1-compatible
-   constructs) and written against the known 5.1 traps, but it needs one real run before you
-   trust it. `install.sh` under Git-Bash is the verified Windows path today.
+1. **`install.ps1` has never been executed on Windows.** As of 1.2.2 it is now *parse*-validated
+   against a real PowerShell 7.4 parser — which is how the fatal `Get-ShellVar` interpolation bug
+   was finally caught, after "structural validation" had passed it for three releases. Parsing is
+   not running: the file is syntactically valid and 5.1-compatible in construct, but no code path
+   in it has been executed on Windows, and PowerShell 5.1 is not 7.4. **`install.sh` under
+   Git-Bash remains the verified Windows path.** Treat `install.ps1` as needing one real run
+   before you trust it, and expect that run to find things.
 2. **GitHub only.** The `gh` CLI, PR flow and branch protection are assumed. Other forges
    need work in `guard.sh`'s ship-flow section.
 3. **`gh` was absent in the sandbox**, so the ship flow's live merge path is unexercised.
@@ -76,7 +131,7 @@ milestone depends on them.
 | | |
 |---|---|
 | self-test | 180 tests, 173 pass, 0 fail, 7 skip (grows with the suite; re-run for current numbers) |
-| install size | ~1.2 MB, of which `test_hooks.py` is 172 KB (13%) |
+| install size | ~1.6 MB, of which `test_hooks.py` is 224 KB (14%) |
 | `guard.sh` per Bash tool call | ~64 ms |
 | `scope-guard.sh` per Edit/Write | ~58 ms |
 | `session-start.sh` (once per session) | ~1.5 s, incl. a 0.6 s `--smoke` self-test |
@@ -106,7 +161,7 @@ then no gate is broken. Python resolved `bash` to `C:\Windows\System32\bash.exe`
 WSL *relay* — which shadows Git-Bash on PATH and dies before the hook runs when no WSL distro
 is installed. Every test then fails for the same unrelated reason.
 
-Ratchet 1.0.0 probes for a bash that actually runs a command, prefers Git-Bash, and prints its
+Ratchet probes for a bash that actually runs a command, prefers Git-Bash, and prints its
 choice in the suite's first line (`ratchet self-test: bash=... python=...`). Both installers now
 pin `RATCHET_BASH` to the interpreter they verified, and `install.sh` refuses to install if Python
 cannot spawn a working bash at all. To override by hand:

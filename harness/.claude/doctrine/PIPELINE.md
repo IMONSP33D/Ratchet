@@ -344,7 +344,7 @@ run is the one that closes the soak's WIN rows.
 
 ---
 
-## The control layer — 23 scripts in `.claude/hooks/`
+## The control layer — 25 scripts in `.claude/hooks/`, plus 3 stack packs
 
 Agents never edit any of these. Seven of them (`settings.json`, `guard.sh`, `scope-guard.sh`,
 `hooklib.sh`, `escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`) are the **control set**: Tier 2b
@@ -387,18 +387,31 @@ and the repeat-failure hash stop (**same failure twice with no diff change = imm
 `dispatch-baseline.sh` · `checkpoint-evidence.sh` · `gc-prune.sh` · `escalate.sh` ·
 `pipeline-event.sh` · `proof_map.py` · `run_metrics.py`
 
-### Human-only (1)
+### Human-only (2)
 
 `approve.sh` — denied to the agent at three layers, requires a TTY, refuses never-escalatable ids.
+`interview.sh` — generates the domain pack from nine questions; safe to re-run, and your previous
+answers become the defaults.
 
 ### Libraries, config and checkers (7)
 
-`hooklib.sh` · `escalation-lib.sh` · `ratchet.config.sh` (core) · `domain.config.sh` (domain pack) ·
-`stack/{{STACK_NAME}}.sh` (command interface) · `check_done.py` (definition of done) ·
+`hooklib.sh` · `escalation-lib.sh` · `esc_payload.py` (derives the sha256 an approval binds to) ·
+`ratchet.config.sh` (core) · `domain.config.sh` (domain pack) · `check_done.py` (definition of done) ·
 `check_narrative.py` (narrative budget, name validation)
 
-`test_hooks.py` sits alongside them and tests them, including that every embedded copy of the laws
-matches `_LAWS.md`.
+### The suite (1)
+
+`test_hooks.py` — tests all of the above, including that every embedded copy of the laws matches
+`_LAWS.md` and that the four hardcoded version strings agree.
+
+### Stack packs — 3, in `.claude/hooks/stack/`
+
+`python-pytest.sh` · `node-jest.sh` · `generic.sh`. Not part of the 25: they sit one directory down
+and bind the command interface rather than implementing control.
+
+**8 + 7 + 2 + 7 + 1 = 25.** Change that arithmetic and change this heading in the same commit. A
+drifting count is how `interview.sh` and `esc_payload.py` went unlisted here for a whole release
+cycle — and an unlisted file is one nobody audits.
 
 ---
 

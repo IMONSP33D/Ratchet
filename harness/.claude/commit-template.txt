@@ -1,0 +1,39 @@
+Version X.X.X:
+
+# ---------------------------------------------------------------------------
+# RATCHET RELEASE-COMMIT TEMPLATE
+#
+# Subject line, one line, this exact shape:
+#
+#   Version X.X.X: <what changed, in at most three sentences>
+#
+# Replace X.X.X with the version in ./VERSION. Write the three sentences at a
+# high-school reading level while staying technically exact: name the thing you
+# changed, say what it now does, and say why it mattered. Plain words, real
+# nouns. "Fixed the dispatch store so agents can no longer widen their own write
+# scope" beats "hardened attribution subsystem invariants".
+#
+# Three sentences is the cap, not the target. One is fine if one is the truth.
+#
+# WHEN THIS TEMPLATE APPLIES
+#   Release and version commits -- the ones a human makes by running `git commit`
+#   with no -m. This template is what fills that editor.
+#
+# WHEN IT DOES NOT
+#   In-run work commits. Each green TDD cycle is one Conventional Commit
+#   (`<type>(<scope>): <subject>`, referencing requirement ids) made with
+#   `git commit -m`, which never opens an editor and so never sees this file.
+#   The two formats do not collide: one describes a release, the other describes
+#   a cycle. See .claude/doctrine/CLAUDE.md for the Conventional Commit rule.
+#
+# EXAMPLE
+#
+#   Version 1.2.2: Closed a hole where an agent could rewrite the file that
+#   defines which paths it is allowed to write, which made the scope check
+#   decorative. Reconnected the metrics counters to the event names the hooks
+#   actually emit, so a run now reports real numbers instead of blanks. Added
+#   timing that shows where a run's minutes went, including how long it spent
+#   waiting on a human.
+#
+# Lines beginning with '#' are stripped by git and never reach the message.
+# ---------------------------------------------------------------------------
