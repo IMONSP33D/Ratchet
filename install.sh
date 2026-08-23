@@ -597,8 +597,8 @@ if [ -n "$PY" ]; then
   ok "python3 via '$PY' ($($PY -c 'import sys;print(sys.version.split()[0])' 2>/dev/null))"
 else
   err "no working Python 3 found (probed \$RATCHET_PYTHON, python3, python, 'py -3')."
-  say "        Four of Ratchet's gates are Python: check_done.py, check_narrative.py,"
-  say "        proof_map.py, run_metrics.py. Without an interpreter the ship gate"
+  say "        Four of Ratchet's gates are Python: check_done.py, proof_map.py,"
+  say "        run_metrics.py, esc_payload.py. Without an interpreter the ship gate"
   say "        cannot evaluate the definition of done, and it fails closed."
   say ""
   say "        If you are on Windows and 'python3' DID appear to exist: that is the"
@@ -688,8 +688,8 @@ PYEOF
       say "          - all-WSL (recommended if you are already here):"
       say "                sudo apt install python3 git"
       say "                clone the repo INSIDE WSL (~/, not /mnt/c) and install there"
-      say "          - all-Windows: run install.ps1 from PowerShell, or install.sh"
-      say "                from Git-Bash, with python.org Python on PATH"
+      say "          - all-Windows: run install.sh from Git-Bash, with python.org"
+      say "                Python on PATH (there is no separate PowerShell installer)"
     else
       err "Python cannot spawn a working bash."
       say "        Every hook is a bash script and the suite drives them through Python,"
@@ -869,7 +869,7 @@ if [ "$HOST_FATAL" = "1" ]; then
   printf '  what is missing for your platform:\n\n' >&2
   printf '      ./ratchet-dependencies.sh --check      # report only, changes nothing\n' >&2
   printf '      ./ratchet-dependencies.sh              # install what is missing\n\n' >&2
-  printf '  (Windows/PowerShell: .\\ratchet-dependencies.ps1 -Check)\n' >&2
+  printf '  (Windows: run the same commands under Git-Bash or WSL.)\n' >&2
   printf '  Then re-run this installer.\n' >&2
   printf '  Every one of them is a tool a SECURITY GATE needs, which is why this is\n' >&2
   printf '  a refusal and not a warning: a gate that cannot run has not passed.\n' >&2
@@ -1729,7 +1729,6 @@ MAPFILE="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/rt-subs.$$")"
     --arg base           "$BASE_BRANCH" \
     --arg prefix         "agent/" \
     --arg escmode        "$ESCALATION_MODE" \
-    --arg forge          "github" \
     --arg secretsdir     "secrets" \
     --arg esckey         "secrets/escalation.key" \
     --arg verify         "${VERIFY_CMD:-}" \
@@ -1751,7 +1750,6 @@ MAPFILE="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/rt-subs.$$")"
       BASE_BRANCH:$base,                RATCHET_BASE_BRANCH:$base,
       AGENT_BRANCH_PREFIX:$prefix,      RATCHET_AGENT_BRANCH_PREFIX:$prefix,
       ESCALATION_MODE:$escmode,         RATCHET_ESCALATION_MODE:$escmode,
-      FORGE:$forge,                     RATCHET_FORGE:$forge,
       SECRETS_DIR:$secretsdir,          RATCHET_SECRETS_DIR:$secretsdir,
       ESCALATION_KEY:$esckey,           RATCHET_ESCALATION_KEY:$esckey,
       VERIFY_CMD:$verify,               RATCHET_VERIFY_CMD:$verify,
@@ -2043,11 +2041,22 @@ if [ "$DRY_RUN" != "1" ] && [ -n "$MANIFEST_TMP" ]; then
 fi
 
 # --- version + checksum baseline for ratchet-update.sh ----------------------
-# Without these, the FIRST update cannot tell "you edited this hook" from "the
-# bundle changed it", so it reports every differing harness file as UNVERIFIED
-# and preserves copies nobody asked for. Recording the baseline at install time
-# is the only moment it is free and unambiguous.
-# Format: "<sha256>  <repo-relative-path>" -- two spaces, sha256sum -c compatible.
+# Without these, an update cannot tell "you edited this hook" from "the bundle
+# changed it". Recording the baseline at install time is the only moment that
+# question is free and unambiguous.
+#
+# TWO hashes per file, because a real 3-way merge needs old-template vs
+# new-template as well as old vs on-disk, and only the source tree (this
+# HARNESS_DIR, pre-substitution) can ever answer the first one:
+#   col1 = sha256 of the file AS INSTALLED (after {{MARKER}} substitution).
+#          Compared against the live on-disk file, this answers "did the user
+#          edit this locally".
+#   col2 = sha256 of the SOURCE template file with every {{MARKER}} replaced
+#          by a fixed placeholder, computed on the pre-substitution bytes in
+#          $HARNESS_DIR. Compared against the same computation against a
+#          newer bundle's source file, this answers "did the template change
+#          upstream" -- independent of what any project substituted into it.
+# Format: "<col1-sha256>  <col2-sha256>  <repo-relative-path>"
 if [ "$DRY_RUN" != "1" ]; then
   printf '%s\n' "$RT_INSTALLER_VERSION" > "$TARGET/.claude/.ratchet-version" 2>/dev/null || true
 
@@ -2055,6 +2064,20 @@ if [ "$DRY_RUN" != "1" ]; then
   if command -v sha256sum >/dev/null 2>&1; then RT_SUM="sha256sum"
   elif command -v shasum >/dev/null 2>&1; then RT_SUM="shasum -a 256"
   fi
+  rt_tmpl_hash() {   # rt_tmpl_hash <source-abs-path> -> hex on stdout
+    [ -n "$PY" ] && [ -f "$1" ] || { rt_hash_installed "$1"; return; }
+    "$PY" - "$1" <<'PYEOF' 2>/dev/null
+import sys, re, hashlib
+try:
+    with open(sys.argv[1], "rb") as fh:
+        b = fh.read()
+except OSError:
+    sys.exit(0)
+t = re.sub(rb"\{\{[A-Z0-9_]+\}\}", b"<<RTMARK>>", b.replace(b"\r\n", b"\n"))
+print(hashlib.sha256(t).hexdigest())
+PYEOF
+  }
+  rt_hash_installed() { [ -n "$RT_SUM" ] && [ -f "$1" ] && $RT_SUM "$1" 2>/dev/null | awk '{print $1}'; }
   if [ -n "$RT_SUM" ]; then
     (
       cd "$TARGET" 2>/dev/null || exit 0
@@ -2065,12 +2088,22 @@ if [ "$DRY_RUN" != "1" ]; then
             [ -f "$f" ] || continue
             case "$f" in
               */domain.config.sh) continue ;;   # USER class: the walls you configured
-              *.local-*|*.bak-*)  continue ;;
+              *.local-*|*.bak-*|*.ratchet-merge) continue ;;
             esac
-            $RT_SUM "$f" 2>/dev/null
+            rel="${f#./}"
+            inst_sum="$(rt_hash_installed "$f")"
+            [ -n "$inst_sum" ] || continue
+            tmpl_sum="$(rt_tmpl_hash "$HARNESS_DIR/$rel")"
+            [ -n "$tmpl_sum" ] || tmpl_sum="$inst_sum"
+            printf '%s  %s  %s\n' "$inst_sum" "$tmpl_sum" "$rel"
           done
         done
-      } | sed 's|  \./|  |' > .claude/.ratchet-manifest.tmp 2>/dev/null
+        if [ -f "CLAUDE.ratchet.md" ] && [ -f "$HARNESS_DIR/.claude/doctrine/CLAUDE.md" ]; then
+          inst_sum="$(rt_hash_installed "CLAUDE.ratchet.md")"
+          tmpl_sum="$(rt_tmpl_hash "$HARNESS_DIR/.claude/doctrine/CLAUDE.md")"
+          [ -n "$inst_sum" ] && printf '%s  %s  %s\n' "$inst_sum" "${tmpl_sum:-$inst_sum}" "CLAUDE.ratchet.md"
+        fi
+      } > .claude/.ratchet-manifest.tmp 2>/dev/null
       mv -f .claude/.ratchet-manifest.tmp .claude/.ratchet-manifest 2>/dev/null
     ) || true
     if [ -f "$TARGET/.claude/.ratchet-manifest" ]; then

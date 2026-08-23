@@ -28,8 +28,8 @@ When it can't proceed, it **stops loudly** rather than proceeding on a guess.
 ./install.sh --target . --stack python-pytest --project-name my-app
 ```
 
-<sub>Windows/PowerShell: <code>.\ratchet-dependencies.ps1 -Check</code> then <code>.\install.ps1 -Target .</code> —
-but read <a href="#limitations-stated-plainly">Limitations</a> first; <code>install.sh</code> under Git-Bash is the verified Windows path.</sub>
+<sub>Windows: run the same three commands under Git-Bash (ships with Git for Windows) or WSL —
+there is no separate PowerShell installer; see <a href="#requirements">Requirements</a>.</sub>
 
 ---
 
@@ -101,10 +101,12 @@ hooks, and each is a real process with a real exit code:
 | `stop-gate.sh` | when the agent tries to end its turn | The definition of done. Tiered: inert with no run, fast checks mid-run, the full deterministic gate at ship tier. Caps retries; refuses a second identical attempt. |
 | `notify.sh` | on notification | Pages your webhook when a run stops for a decision. |
 
-Plus five Python checkers the gates call:
+Plus four Python checkers the gates call:
 
-- **`check_done.py`** — the definition of done, item by item (19 checks, each with a driven failure input)
-- **`check_narrative.py`** — narrative budgets and name validation
+- **`check_done.py`** — the definition of done: two load-bearing checks (changed files subset of the
+  manifest; the verify-gate artifact matches HEAD and exited 0), each with a driven failure input. Cut
+  from 19 checks 2026-08-23 — the other 17 audited the pipeline's own paperwork, not a command's exit
+  code.
 - **`proof_map.py`** — derives which tests cover which WIN row
 - **`run_metrics.py`** — the mechanical record the retro reads: counters, cross-counter contradictions, and where the run's time went
 - **`esc_payload.py`** — derives the sha256 an approval binds to
@@ -213,44 +215,40 @@ approval's scope. That boundary is what makes the escalatable class safe to have
 | **bash 4+** | Every hook is a bash script. On Windows that means Git-Bash (ships with Git for Windows) or WSL. macOS ships bash 3.2 — `brew install bash`. |
 | **git** | The gates read the worktree on every hook firing. |
 | **jq** | **Required for the ship gate.** `guard.sh`'s ship-consent rule refuses outright without it — a merge decision made without a real JSON parser is a guess, so it fails *closed*. Elsewhere the hooks fall back to Python's `json` module, then to a sed reader used for non-security fields only. Install it. |
-| **Python 3.8+** | Five of the checkers the gates call are Python (all 8 hooks themselves are bash). Standard library only — nothing to pip install. |
+| **Python 3.8+** | Four of the checkers the gates call are Python (all 8 hooks themselves are bash). Standard library only — nothing to pip install. |
 | **gh** | Only for the ship flow (open PR, merge). The installer warns rather than refuses. |
 
 **WSL note.** WSL is fully supported — it is Linux. The one thing that cannot work is a WSL shell
 driving a *Windows* Python, because they do not share a filesystem. Keep the project and the
 toolchain in one world: either clone into `~/` and use the distro's `python3`/`git`, or keep the
-project on `C:\` and use PowerShell or Git-Bash.
+project on `C:\` and use Git-Bash.
 
-### Linux / macOS / Git-Bash
+### Linux / macOS / Git-Bash / WSL
+
+Ratchet ships one installer, bash, for every platform — including Windows, via Git-Bash or WSL.
+There is no separate PowerShell installer; see [Limitations](#limitations-stated-plainly) for why.
 
 ```bash
 git clone <ratchet-repo> ratchet && cd ratchet
 ./install.sh --target ../my-repo --project-name "My Repo" --stack python-pytest
 ```
 
-### Windows (PowerShell 5.1 or 7)
-
-```powershell
-git clone <ratchet-repo> ratchet; cd ratchet
-.\install.ps1 -Target ..\my-repo -ProjectName "My Repo" -Stack python-pytest
-```
-
 ### Options
 
-| bash | PowerShell | Meaning |
-|---|---|---|
-| `--target <dir>` | `-Target` | Repo to install into. Default: cwd. |
-| `--stack <name>` | `-Stack` | `python-pytest`, `node-jest`, `generic`. Default: auto-detected. |
-| `--project-name <s>` | `-ProjectName` | Human label. Default: repo folder name. |
-| `--domain none\|interactive` | `-Domain` | Run the domain interview now, or later. |
-| `--escalation-mode light\|strict` | `-EscalationMode` | How broad the escalatable class is. |
-| `--base-branch <b>` | `-BaseBranch` | The protected branch. Default: detected, else `main`. |
-| `--verify quick\|smoke\|full\|none` | `-Verify` | Post-install suite tier. Default `quick`. `full` is ~25 min under Git-Bash. |
-| `--dry-run` | `-WhatIf` | Print every action; perform none. |
-| `--force` | `-Force` | Proceed despite modified tracked files. |
-| `--substitute-only` | `-SubstituteOnly` | Re-fill the brace markers after editing the domain pack. |
-| `--uninstall` | `-Uninstall` | Reverse the install, restoring the pre-Ratchet settings backup. |
-| `--no-verify` | `-SkipVerify` | Skip the post-install hook-suite run entirely. |
+| Flag | Meaning |
+|---|---|
+| `--target <dir>` | Repo to install into. Default: cwd. |
+| `--stack <name>` | `python-pytest`, `node-jest`, `generic`. Default: auto-detected. |
+| `--project-name <s>` | Human label. Default: repo folder name. |
+| `--domain none\|interactive` | Run the domain interview now, or later. |
+| `--escalation-mode light\|strict` | How broad the escalatable class is. |
+| `--base-branch <b>` | The protected branch. Default: detected, else `main`. |
+| `--verify quick\|smoke\|full\|none` | Post-install suite tier. Default `quick`. `full` is ~25 min under Git-Bash. |
+| `--dry-run` | Print every action; perform none. |
+| `--force` | Proceed despite modified tracked files. |
+| `--substitute-only` | Re-fill the brace markers after editing the domain pack. |
+| `--uninstall` | Reverse the install, restoring the pre-Ratchet settings backup. |
+| `--no-verify` | Skip the post-install hook-suite run entirely. |
 
 ### What the installer will and will not do to your repo
 
@@ -281,10 +279,12 @@ git clone <ratchet-repo> ratchet; cd ratchet
 ./ratchet-update.sh --apply
 ```
 
-Your domain pack, contracts, findings, retros and secrets are never touched; harness files you edited
-locally are preserved as `.local-<timestamp>` rather than clobbered; `.claude/` is backed up with a
-one-line rollback. See `.claude/doctrine/UPGRADING.md`, especially for the agent-driven path — the
-control layer is Tier 2b, so pipeline changes go through the supervisor-changeset pattern.
+Your domain pack, contracts, findings, retros and secrets are never touched. Harness files get a real
+three-way merge — old-template vs new-template vs on-disk: unedited files upgrade silently, a file you
+edited but upstream didn't is left alone, and a file you both touched gets a `.ratchet-merge` sibling
+to reconcile by hand instead of a silent overwrite. See `.claude/doctrine/UPGRADING.md`, especially for
+the agent-driven path — the control layer is Tier 2b, so pipeline changes go through the
+supervisor-changeset pattern.
 
 ---
 
@@ -361,16 +361,16 @@ opens an editor and therefore never reads the template.
 
 ## Limitations, stated plainly
 
-- **`install.ps1` has never been run on Windows.** As of 1.2.2 it is validated against a real
-  PowerShell parser — which is how a fatal syntax error that had survived three releases was finally
-  caught — but parsing is not running, and PowerShell 5.1 is not 7.4. **`install.sh` under Git-Bash is
-  the verified Windows path.**
+- **No PowerShell installer.** Ratchet ships one installer, `install.sh`, on every platform. On
+  Windows that means Git-Bash or WSL — see [Requirements](#requirements). The former `install.ps1`
+  path was removed: bash is the only harness the hooks are written against, and a second installer
+  in a second language was a second thing to keep correct.
 - **GitHub and `gh` only, in v1.** The ship flow is `gh pr create` / `gh pr merge` and the guard
   understands GitHub's command surface. GitLab and Bitbucket are not supported and will not half-work
   — they will fail at PR creation.
 - **bash is required, including on Windows.** The hooks are bash scripts; v1 ships no PowerShell hook
-  implementation. The Windows installer refuses rather than installing a harness whose every gate
-  would error out.
+  implementation, which is why there is no PowerShell installer either — one would install a harness
+  whose every gate errors out on that platform.
 - **`jq` is required for the ship gate specifically.** Without it `guard.sh` refuses the merge path
   outright rather than guessing. Other hooks degrade to a Python JSON reader; the sed fallback below
   that is for non-security fields only. Treat jq as required and the degradation as a safety net, not

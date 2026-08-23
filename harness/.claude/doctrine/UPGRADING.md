@@ -6,9 +6,9 @@ matters more — what the **agent** does when the pipeline itself is what needs 
 
 **Where it lives and who owns it.** `.claude/doctrine/UPGRADING.md`. Harness-owned doctrine, Tier 2b:
 it ships with Ratchet, it is identical in every project, and it is replaced wholesale by
-`ratchet-update.sh`; if you edit it anyway, the updater will report the edit and keep your copy as
-`UPGRADING.md.local-<timestamp>` rather than discard it. **Humans: you do not need to edit this file.**
-Agents MUST NOT edit it, and no approval lifts that.
+`ratchet-update.sh`; if you edit it anyway and upstream has not touched it since, the updater leaves
+your edit alone (§2.2 — it is yours now). **Humans: you do not need to edit this file.** Agents MUST
+NOT edit it, and no approval lifts that.
 
 **Read this when:** a new Ratchet version ships; or a run keeps hitting the same gate and the gate
 looks wrong; or someone is about to hand-edit something under `.claude/`.
@@ -66,57 +66,50 @@ One sanctioned exception: the updater **appends** a row to
 `.agent-development/PENDING-HUMAN-ACTIONS.md` when the update needs a human. That register is
 append-only by design and exists to be appended to. Nothing else in the USER partition is written.
 
-### 2.2 Local modifications to harness files
+### 2.2 A real three-way merge, not a diff against your disk
 
-At install and at every update, the updater records `.claude/.ratchet-manifest`: a checksum per
-harness file, as written. At the next update it asks a decidable question — *does this file still
-match what we wrote?* — instead of the undecidable one, *is this difference ours or theirs?*
+At install and at every update, `install.sh` (the only writer of it — CONTRACT §2.1) records
+`.claude/.ratchet-manifest`: two checksums per harness file, as written — one of the file as
+installed, one of the source template with every `{{MARKER}}` reduced to a placeholder. That second
+hash is what makes a *three*-way compare possible: old-template vs new-template vs on-disk, not just
+"does this file match what we last wrote".
 
-- **Unchanged** → replaced silently. That is what an update is.
-- **Changed by you or by an agent** → listed by name, and the previous contents are kept beside the
-  file as `<file>.local-<timestamp>`. A `.local-*` name matches no hook glob (`*.sh`, `*.py`) and is
-  wired into nothing, so it is inert: a diff waiting for you, not a second control layer.
-  `--force-overwrite-modified` skips the copies; the full backup still has them.
-- **Changed, and the change is one of the never-escalatable control-set files**
-  (`settings.json guard.sh scope-guard.sh hooklib.sh escalation-lib.sh approve.sh
-  ratchet.config.sh`) → the same handling, reported at higher volume, plus a
-  `control-set-drift-detected` row filed for a human. This is a warning and not a refusal on
-  purpose: refusing would block the very update that restores the control layer to a known state.
-- **No manifest at all** (an install that predates the updater) → every differing harness file is
-  reported `UNVERIFIED` and preserved as `.local-*`. Nothing is assumed clean. Run
-  `ratchet-update.sh --adopt-baseline` once, immediately after an install you trust, to make the
-  question decidable from then on.
+Every harness file lands in exactly one of five buckets:
+
+| you edited it | upstream changed it | verdict | what happens |
+|---|---|---|---|
+| no | no | **SAME** | nothing. |
+| no | yes | **UPDATE** | overwritten silently — a clean upgrade. |
+| yes | no | **KEEP** | left alone, silently. It is yours now. |
+| yes | yes | **CONFLICT** | the only interesting case. Your file is untouched; the new version
+  lands beside it as `<file>.ratchet-merge` for you to merge by hand. |
+| — | *(no baseline row)* | **UNVERIFIED** | treated as CONFLICT — a difference that cannot be
+  attributed is never silently kept or silently overwritten. |
+
+`ratchet-update.sh` decides; `install.sh` writes, same as a first install. Both KEEP and CONFLICT
+paths are protected from that write and restored (or merge-filed) immediately after — see the script
+header for the exact sequence. A `.claude/.backup-*` directory and a generated `restore.sh` are not
+part of this: a CONFLICT file is never overwritten in the first place, so there is nothing to roll
+back to, and `git checkout .` remains a complete undo for every UPDATE.
+
+**No manifest at all** (an install that predates the manifest, or a checksum tool that was absent at
+install time) → every harness file is UNVERIFIED, i.e. treated as a conflict, until you run
+`ratchet-update.sh --adopt-baseline` once — it re-runs `install.sh` on the current tree to record a
+fresh baseline. Do this only when you know the tree has not been hand-edited since install.
 
 ### 2.3 What makes it refuse
 
 | condition | why | override |
 |---|---|---|
-| `.pipeline/run-active` exists | Swapping the gates mid-run means the run's second half is judged by different rules than its first, and nothing in the record says which half of the evidence was collected under which rules. | `--force`, and then say so in `DECISIONS.md` |
+| `.pipeline/run-active` exists | Swapping the gates mid-run means the run's second half is judged by different rules than its first. | archive the run first (`gc-prune.sh archive <milestone>`) |
 | the bundle is an older version | An accidental downgrade silently removes gates you are relying on. | `--allow-downgrade` |
-| `jq` is absent | `settings.json` is the permission surface; merging JSON with `sed` means guessing, and a permissive entry that survives a bad guess reopens a wall. CONTRACT §0.3: a gate that cannot determine safety blocks. | none |
-| no checksum tool | "Was this harness file edited?" would become a guess made immediately before overwriting the control layer. | none |
-| the backup could not be written | An update without a backup is not an update, it is a hope. | none |
+| no checksum tool (no `sha256sum`/`shasum`/`python3`) | "Was this harness file edited?" would become a guess made immediately before overwriting the control layer. | none |
 | no terminal and no `--yes` | An unattended process tried to replace the control layer. | `--yes` |
 
-### 2.4 Backup and rollback
-
-Before one byte is written, the whole `.claude/` tree (minus older backups) plus every doctrine doc
-the update will rewrite is copied to `.claude/.backup-<version>-<timestamp>/`, and a `restore.sh` is
-generated inside it. Rollback is one command, printed on success and again, loudly, on failure:
-
-```sh
-bash .claude/.backup-<version>-<timestamp>/restore.sh
-```
-
-It restores the control layer and **nothing else**. `.pipeline/`, `.agent-development/`, `secrets/`,
-`docs/evidence/`, SPEC, MILESTONES and DECISIONS were never modified, so putting them back would be
-a change rather than a rollback. The `PENDING-HUMAN-ACTIONS.md` row stays too: it is the record that
-this happened.
-
-**The updater never rolls back by itself.** If the hook suite goes red on the new harness, it says so
-at maximum volume, prints the rollback command, and exits 1 — but it leaves the new tree in place. An
-automatic rollback would leave you with a working harness and no evidence that the new one is broken,
-which is how a broken release ships twice.
+`install.sh` itself still refuses a dirty tracked worktree unconditionally — `ratchet-update.sh`
+passes it `--force` on your behalf, because an update to an in-progress project is exactly the
+situation `git checkout .` needs to remain a complete undo for, and this updater's whole design is
+built around making that true per file instead.
 
 ---
 
@@ -191,36 +184,39 @@ Sometimes a project genuinely must diverge — a regulator requires a wall the s
 an internal tool needs a permission the default deny blocks. The hatch exists. Here is the price
 before the procedure.
 
-**A local control-layer fork means every future update is a merge.** Not once. Every time, forever,
-for as long as the divergence lives. Each update reports your patched files as locally modified,
-saves `.local-*` copies, and hands you a three-way reconciliation that nobody on the project will
-remember the reasoning for in four months. **Proposing the change upstream is nearly always cheaper,
-including when it feels slower today** — upstream costs you one changeset and some waiting; a fork
-costs you a merge per release, indefinitely, and the merges get harder as the file drifts.
+**A local control-layer fork means every future update THAT TOUCHES THE SAME FILE is a merge.** Not
+every update — the three-way compare (§2.2) leaves a fork alone, silently, for as long as upstream
+does not touch that file too. But the day upstream *does* change it, your fork and upstream's change
+collide by construction: CONFLICT, a `.ratchet-merge` to reconcile by hand, and nobody on the project
+will remember the original reasoning four months later. **Proposing the change upstream is nearly
+always cheaper, including when it feels slower today** — upstream costs you one changeset and some
+waiting; a fork costs you an unpredictable merge, on an unpredictable release, for as long as the
+divergence lives, and the merge gets harder as the file drifts on both sides in the meantime.
 
 If, having read that, you still must diverge:
 
 1. **Put the divergence in the domain pack, because that is the mechanism that exists.**
    `.claude/hooks/domain.config.sh` is USER-class: the updater preserves it and never overwrites it,
    and it is the one file under `.claude/` a human owns. Prefer *configuration* over *code* —
-   `DOMAIN_NEVER_ESCALATABLE`, `FORBIDDEN_EXEC_TOKENS`, `SECURITY_BOUNDARY_FILES`,
+   `DOMAIN_NEVER_ESCALATABLE`, `FORBIDDEN_EXEC_TOKENS`,
    `BANNED_READ_FILES` and the rest of the pack exist precisely so most divergences never touch a
    harness file at all. **A divergence you can express as a domain pack value is not a fork**, and
    it survives every upgrade for free.
 
    If it genuinely cannot be expressed as configuration, then you are editing a harness file and the
-   updater will classify it as locally modified — which is the billing described in step 3. There is
-   no separate escape-hatch file: an earlier draft of this document described a `local-patch.sh`
-   sourced by the domain pack, and that mechanism was never built at either end. Do not go looking
-   for it.
+   updater will classify it as KEEP (§2.2) — silent until upstream changes the same file, then
+   CONFLICT. There is no separate escape-hatch file: an earlier draft of this document described a
+   `local-patch.sh` sourced by the domain pack, and that mechanism was never built at either end. Do
+   not go looking for it.
 2. **Record it in `DECISIONS.md` with a name.** Kebab-case, 2–5 words, stating the problem
    (CONTRACT §6): `egress-wall-required-by-policy`, not `local-changes`. The entry carries
    **Default/config.**, **Affected.**, and — this one is the point — *what would have to become true
    upstream for this patch to be deleted.* A fork with no deletion condition is permanent by
    accident.
-3. **Expect it in every future update report.** It will appear as a permanent local delta, by name,
-   on every `--check` from now on. That recurring line is the feature: it is the fork billing you,
-   visibly, every release, which is the only mechanism that reliably gets forks retired.
+3. **Expect the bill on whichever update collides with it.** Not every `--check` — only the one where
+   upstream touches the same file, which is exactly when a merge is actually needed. That CONFLICT
+   line, when it arrives, is the fork billing you: it is the mechanism that reliably gets forks
+   retired instead of drifting unnoticed.
 4. **Never fork the never-escalatable control set to loosen it.** `guard.sh`, `scope-guard.sh`,
    `hooklib.sh`, `escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`, `settings.json`. A local
    patch that makes one of these *stricter* is a defensible decision. A local patch that makes one of
@@ -238,13 +234,14 @@ Run this before starting any milestone on a freshly-updated harness.
       outright — "work around the scope guard's attribution bug" is worse than useless once the bug
       is fixed, and a stale lesson costs tokens in every dispatch for the rest of the project.
       Anything the update fixed gets closed with a `Supersedes:` line, not deleted.
-- [ ] **Read the new never-escalatable rules** in the update report, or re-derive them from
-      `.claude/hooks/escalation-lib.sh`. Something that used to be approvable with a human
-      confirmation may now be a hard wall. A standing workflow that depended on it needs redesigning,
-      not approving.
-- [ ] **Read the changed configuration defaults** in the report, especially any marked as values this
-      project has an opinion about. Nothing fails when a default moves under you; the number is just
-      different now, which is the expensive kind of quiet.
+- [ ] **Diff `.claude/hooks/escalation-lib.sh`'s `ESC_NEVER_CORE`/`ESC_STRICT_NEVER` against the
+      previous version** (`git diff` against the pre-update commit — commit before you update, so this
+      is one command). Something that
+      used to be approvable with a human confirmation may now be a hard wall. A standing workflow that
+      depended on it needs redesigning, not approving.
+- [ ] **Diff `.claude/hooks/ratchet.config.sh`'s defaults the same way**, especially any this project
+      overrides via `settings.json` `.env` or `domain.config.sh`. Nothing fails when a default moves
+      under you; the number is just different now, which is the expensive kind of quiet.
 - [ ] **Run the hook suite, then the project's own suite.** The updater runs the first one. It cannot
       run the second, and a scaffold change that broke your `VERIFY_CMD` wiring shows up only there.
       ```sh
@@ -259,9 +256,10 @@ Run this before starting any milestone on a freshly-updated harness.
       ```sh
       .claude/hooks/approve.sh --postcondition-baseline
       ```
-- [ ] **Resolve every `.local-*` file.** Diff it, decide, then delete it. Deleting it is how the
-      `harness-files-locally-modified` row gets closed. A `.local-*` left on disk for a month is a
-      decision nobody made.
+- [ ] **Resolve every `<file>.ratchet-merge`.** It sits beside a file the updater left untouched
+      because you had edited it AND upstream changed it too (§2.2, CONFLICT). Diff the two, merge by
+      hand into the real file, then delete the `.ratchet-merge` — until you do, the next update reports
+      the same conflict again, which is deliberate, not a bug.
 - [ ] **Close the rows the update filed** in `.agent-development/PENDING-HUMAN-ACTIONS.md`. Set the
       Status column to DONE and say what you did; rows are never deleted, because a closed row is
       evidence.
