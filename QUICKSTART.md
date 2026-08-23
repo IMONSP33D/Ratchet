@@ -23,12 +23,8 @@ nothing. When it looks right:
 ./install.sh --target ../my-repo --project-name "My Repo"
 ```
 
-Windows, PowerShell 5.1 or 7:
-
-```powershell
-.\install.ps1 -Target ..\my-repo -ProjectName "My Repo" -WhatIf
-.\install.ps1 -Target ..\my-repo -ProjectName "My Repo"
-```
+Windows: run the same two commands under Git-Bash (ships with Git for Windows) or WSL. There is no
+separate PowerShell installer.
 
 The installer checks the host **first** and refuses before writing anything if
 a security-relevant tool is missing. If it refuses, the message names the tool
