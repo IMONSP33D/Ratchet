@@ -1,0 +1,17 @@
+# Ratchet source bundle — what must never ship in a release
+#
+# Running the hook suite in this tree exercises the real hooks, which write real
+# runtime state into harness/.pipeline/. That state is the authors' test residue:
+# command logs, event logs, and escalation records carrying real run tokens and
+# target hashes. It is dead weight in a bundle (install.sh never copies
+# .pipeline/), but ratchet-update.sh accepts a .zip, so anything left here after
+# a test run travels to users. Keep the tree clean instead of remembering to.
+
+harness/.pipeline/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Never, under any circumstances. The signing key forges approvals forever.
+secrets/
+*.key
