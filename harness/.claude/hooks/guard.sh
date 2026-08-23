@@ -44,6 +44,7 @@ claude-dir-write
 compound-git-form
 control-set-write
 delete-scope
+dispatch-store-write
 escalation-store-write
 forbidden-artifacts
 forbidden-exec-tokens
@@ -345,6 +346,25 @@ g_check_all() {
           "The command would write the escalation store: $RT_REL" \
           "An agent that can edit the ledger can approve itself. escalate.sh and approve.sh are" \
           "the only writers." ;;
+    esac
+  done <<< "$G_WRITES"
+
+  # 3d-bis. the dispatch attribution store: partition globs + exact-mode baselines
+  # The glob file IS the write allow-list scope-guard enforces, and the baseline IS the
+  # evidence the SubagentStop gates attribute work with. An agent that can rewrite either
+  # one authorises its own lane and forges its own alibi, which makes both checks
+  # decorative. dispatch-baseline.sh (invoked as a child process) is the only writer, so a
+  # write reaching this rule is never a legitimate one. Placed above section 7 on purpose:
+  # deletions under $PIPELINE_DIR/ are exempted there, and `rm` reaches $G_WRITES.
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    rt_repo_rel_var "$t"
+    case "$RT_REL/" in
+      "$DISPATCH_DIR"/*)
+        g_refuse dispatch-store-write \
+          "The command would write the dispatch attribution store: $RT_REL" \
+          "That file is the allow-list your own writes are checked against, and the baseline the" \
+          "gates attribute work with. dispatch-baseline.sh is the only writer." ;;
     esac
   done <<< "$G_WRITES"
 
@@ -667,6 +687,11 @@ if [ "${1:-}" = "--selftest" ]; then
   _run ALLOW                   "corpus named in a message" 'git tag -m "regenerate .context/SPEC.md" v1'
   _run secrets-access          "quoted secret is a target" 'cat "secrets/api.key"'
   _run escalation-store-write  "escalation ledger write"  'echo x >> .pipeline/escalations/ledger.jsonl'
+  # the dispatch store, by every write shape that reaches $G_WRITES
+  _run dispatch-store-write    "glob widened by redirect" 'echo "**" > .pipeline/dispatch/p1.glob'
+  _run dispatch-store-write    "baseline forged by tee"   'echo x | tee .pipeline/dispatch/p1.baseline'
+  _run dispatch-store-write    "current pointer moved"    'cp /tmp/x .pipeline/dispatch/current'
+  _run dispatch-store-write    "baseline deleted"         'rm -f .pipeline/dispatch/p1.baseline'
 
   # domain wiring: with an empty domain pack these three cannot fire, so inject a domain.
   _runenv() {  # <env-assignment> <expected-rule> <label> <command>

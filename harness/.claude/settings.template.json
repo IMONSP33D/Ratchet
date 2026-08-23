@@ -207,6 +207,8 @@
       "Read(./{{RATCHET_ESCALATION_KEY}})",
       "Write(./.pipeline/escalations/**)",
       "Edit(./.pipeline/escalations/**)",
+      "Write(./.pipeline/dispatch/**)",
+      "Edit(./.pipeline/dispatch/**)",
 
       "Edit(./CLAUDE.md)",
       "Write(./CLAUDE.md)",

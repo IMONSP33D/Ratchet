@@ -37,6 +37,7 @@ rt_rule_ids() {
 banned-read-files
 claude-dir-write
 control-set-write
+dispatch-store-write
 escalation-store-write
 forbidden-artifacts
 governing-corpus-write
@@ -212,6 +213,17 @@ s_check_tier2b() {
         "only writers, and approve.sh is human-only." ;;
   esac
 
+  # The dispatch store must be checked HERE, in tier2b, because s_check_partition returns
+  # early for everything under $PIPELINE_DIR/ and SCOPE_EXEMPT_PREFIXES exempts it from the
+  # manifest. A rule placed any later never fires.
+  case "$S_REL/" in
+    "$DISPATCH_DIR"/*)
+      s_refuse dispatch-store-write \
+        "This path is inside the dispatch attribution store: $S_REL" \
+        "This is the file your own writes are checked against, and the baseline the SubagentStop" \
+        "gates attribute work with. An agent that can widen its own glob has no glob." ;;
+  esac
+
   if rt_path_matches_list "$S_REL" "${FORBIDDEN_ARTIFACTS:-}"; then
     s_refuse forbidden-artifacts \
       "This path is a domain-forbidden artifact: $S_REL" \
@@ -328,6 +340,9 @@ if [ "${1:-}" = "--selftest" ]; then
   _run ALLOW                  "dotenv example allowed"  Write ".env.example" "TOKEN="
   _run secrets-access         "key write"               Write "secrets/escalation.key" "x"
   _run escalation-store-write "ledger write"            Write ".pipeline/escalations/ledger.jsonl" "{}"
+  _run dispatch-store-write   "partition glob widened"  Write ".pipeline/dispatch/p1.glob" "**"
+  _run dispatch-store-write   "attribution baseline"    Write ".pipeline/dispatch/p1.baseline" "x"
+  _run dispatch-store-write   "dispatch pointer"        Write ".pipeline/dispatch/current" "p1"
   _run unparsable-payload     "no path in payload"      Write "" ""
 
   # bootstrap exemption: the ONE sanctioned agent write to an UNWRITTEN contract,

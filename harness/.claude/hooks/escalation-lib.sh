@@ -257,6 +257,11 @@ esc__sha256_file() { [ -r "$1" ] || return 1; esc__sha256_stdin < "$1"; }
 # a control-set operation; and an approval means nothing if the agent can edit
 # the ledger and the approval files, so $ESCALATIONS_DIR is control-set state.
 # Neither widens §5.6 -- both are the same wall seen from the other side.
+# dispatch-store-write joins them for the identical reason one level down: the
+# glob file IS the scope scope-guard enforces and the baseline IS the evidence
+# the SubagentStop gates attribute with, so an agent able to write either one
+# authorises its own lane. A scope an agent can widen is not a scope, and no
+# approval can coherently lift a rule whose subject is the approval's own scope.
 # ---------------------------------------------------------------------------
 # THE IDS BELOW ARE THE ONES THE GUARDS ACTUALLY EMIT. guard.sh publishes its
 # own list with `guard.sh --list-rules` and the selftest cross-checks every id
@@ -279,6 +284,7 @@ control-layer-write
 approve-script-invocation
 escalation-store-write
 escalation-state-write
+dispatch-store-write
 unparsable-command
 unparsable-payload'
 
