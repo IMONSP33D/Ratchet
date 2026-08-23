@@ -52,7 +52,7 @@ and note it in your report — do not redefine anything that is listed.
       red-gate.sh session-start.sh dispatch-baseline.sh checkpoint-evidence.sh
       gc-prune.sh format.sh notify.sh pipeline-event.sh
       escalation-lib.sh escalate.sh approve.sh interview.sh
-      check_done.py check_narrative.py proof_map.py run_metrics.py
+      check_done.py proof_map.py run_metrics.py
       esc_payload.py
       test_hooks.py
     commit-template.txt         # release-commit template; wired via commit.template
@@ -122,17 +122,14 @@ PENDING_ACTIONS            # .agent-development/PENDING-HUMAN-ACTIONS.md
 # --- git / forge ---
 BASE_BRANCH                # main
 AGENT_BRANCH_PREFIX        # agent/
-FORGE                      # github            (only supported value in v1)
 
 # --- caps & budgets ---
 MAX_STOP_RETRIES           # 3
 MAX_SUBAGENT_RETRIES       # 3
 MAX_REVIEW_ROUNDS          # 2
-MAX_CHECKPOINT_BLOCKS      # 2
 MAX_RUN_WORK_SECONDS       # 28800   (WORK time, not wall — see §5.3)
 MAX_RUN_WALL_SECONDS       # 604800
 IDLE_THRESHOLD_SECONDS     # 900     (gap longer than this is idle, not work)
-COMMIT_SCOPE_LINES         # 400
 
 # --- narrative caps ---
 CAP_RATIONALE_FIXED        # 40
@@ -164,7 +161,6 @@ BANNED_READ_FILES                  # newline list; context-poisoning files
 GOVERNING_CORPUS                   # newline list; human-owned docs (Tier 2b)
 SECRET_PATTERNS                    # newline list; glob-ish patterns
 SECRET_EXEMPTIONS                  # newline list; e.g. .env.example
-SECURITY_BOUNDARY_FILES            # newline list; Hard Stop 1 files
 DOMAIN_NEVER_ESCALATABLE           # newline list; extra rule ids that can never be lifted
 DOMAIN_LAWS                        # markdown block injected as laws 3-6
 DOMAIN_REVIEW_LENS                 # markdown block injected into reviewer
@@ -363,8 +359,9 @@ Findings, lessons, decisions, pending actions and refinements are referenced by 
   the sort key and the archive filename; the name is what humans read and cite.
 - WIN rows keep positional ids (`WIN-M1-03` is a coordinate) and gain a `name` column.
 
-`rt_name_valid` (shell) and `check_narrative.py --validate-name` (python) implement the SAME rules.
-Write a round-trip test that proves they agree on a shared fixture list.
+`rt_name_valid` (`hooklib.sh`) implements these rules. (Through 2026-08-23 a second, independent
+Python implementation — `check_narrative.py --validate-name` — proved agreement with it via a
+round-trip test on a shared fixture list; that script was cut, and the parity test with it.)
 
 ---
 

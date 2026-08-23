@@ -8,7 +8,7 @@
 #
 # WHAT IT PRODUCES (CONTRACT §2.2, frozen names):
 #   DOMAIN_NAME  FORBIDDEN_EXEC_TOKENS  FORBIDDEN_ARTIFACTS  BANNED_READ_FILES
-#   GOVERNING_CORPUS  SECRET_PATTERNS  SECRET_EXEMPTIONS  SECURITY_BOUNDARY_FILES
+#   GOVERNING_CORPUS  SECRET_PATTERNS  SECRET_EXEMPTIONS
 #   DOMAIN_NEVER_ESCALATABLE  DOMAIN_LAWS  DOMAIN_REVIEW_LENS
 #   DOMAIN_SECURITY_PASS  ARBITER_LABEL
 #
@@ -81,7 +81,7 @@ fi
 # Sourced in a subshell-safe way: we only care about the frozen variable names.
 DOMAIN_NAME=""; FORBIDDEN_EXEC_TOKENS=""; FORBIDDEN_ARTIFACTS=""
 BANNED_READ_FILES=""; GOVERNING_CORPUS=""; SECRET_PATTERNS=""
-SECRET_EXEMPTIONS=""; SECURITY_BOUNDARY_FILES=""; DOMAIN_NEVER_ESCALATABLE=""
+SECRET_EXEMPTIONS=""; DOMAIN_NEVER_ESCALATABLE=""
 DOMAIN_LAWS=""; DOMAIN_REVIEW_LENS=""; DOMAIN_SECURITY_PASS=""; ARBITER_LABEL=""
 PROJECT_NAME="${PROJECT_NAME:-}"
 HAD_EXISTING=0
@@ -198,7 +198,7 @@ if [ "$NONINTERACTIVE" != "1" ]; then
   rule
   say "RATCHET — domain pack interview"
   rule
-  say "Nine questions. Every one may be answered with Enter (keep the default) or"
+  say "Eight questions. Every one may be answered with Enter (keep the default) or"
   say "left empty. An empty domain pack is valid and common: it means \"this project"
   say "has no irreversible action that needs its own wall\", and you still get the"
   say "control layer, the governing corpus, secrets protection and the ship gate."
@@ -210,7 +210,7 @@ fi
 
 # 1 -------------------------------------------------------------------------
 ask PROJECT_NAME \
-  "1/9  Project name (the human label used in pager payloads and the recap):" \
+  "1/8  Project name (the human label used in pager payloads and the recap):" \
   "$(basename "$(cd "$SELF_DIR/../.." 2>/dev/null && pwd || echo project)")"
 
 ask DOMAIN_NAME \
@@ -219,7 +219,7 @@ ask DOMAIN_NAME \
 # 2 -------------------------------------------------------------------------
 HAS_DANGER=n
 if [ -n "$FORBIDDEN_EXEC_TOKENS$FORBIDDEN_ARTIFACTS" ]; then HAS_DANGER=y; fi
-if yesno "2/9  Is there an IRREVERSIBLE or DANGEROUS action in this project that an
+if yesno "2/8  Is there an IRREVERSIBLE or DANGEROUS action in this project that an
      agent must never take? (money moving, production deploy, sending mail,
      deleting customer data, publishing a package, charging a card...)" "$HAS_DANGER"; then
 
@@ -242,7 +242,7 @@ fi
 
 # 3 -------------------------------------------------------------------------
 ask LAW4_INVARIANT \
-"3/9  Your domain's SACRED INVARIANT — becomes law 4, quoted in every agent.
+"3/8  Your domain's SACRED INVARIANT — becomes law 4, quoted in every agent.
      One sentence, stated so a reviewer can catch a violation by reading a diff.
      Examples: \"Amounts are integer minor units; never float for money.\"
      \"Every user-facing string goes through i18n; no literals in components.\"
@@ -251,28 +251,21 @@ ask LAW4_INVARIANT \
 
 # 4 -------------------------------------------------------------------------
 ask LAW5_NOHARDCODE \
-"4/9  What must NEVER be hardcoded — becomes law 5.
+"4/8  What must NEVER be hardcoded — becomes law 5.
      Examples: \"Endpoints, feature limits and pricing coefficients live in
      config, never in source.\"" \
   "${LAW5_NOHARDCODE:-}"
 
 # 5 -------------------------------------------------------------------------
 ask LAW6_CREDENTIALS \
-"5/9  Where credentials live — becomes law 6.
+"5/8  Where credentials live — becomes law 6.
      Examples: \"Credentials via environment only; key files mode 0600 outside
      the repo; a redaction filter on every log sink.\"" \
   "${LAW6_CREDENTIALS:-Credentials come from the environment only. No key, token or password is ever written into the repository, a fixture, or a log.}"
 
 # 6 -------------------------------------------------------------------------
-ask_list SECURITY_BOUNDARY_FILES \
-"6/9  Security-boundary files. Touching one of these is Hard Stop 1: the run
-     PAUSES BEFORE the edit rather than after it. Name the files where your auth,
-     signing, session or crypto lives.
-     Examples: src/auth.py  src/session.py  src/crypto/**"
-
-# 7 -------------------------------------------------------------------------
 ask_list BANNED_READ_FILES \
-"7/9  Context-poisoning files the agent must never READ. Superseded specs, giant
+"6/8  Context-poisoning files the agent must never READ. Superseded specs, giant
      dumps, stale corpora. A rule naming a file that does not exist teaches
      nothing — check the path before you type it.
      Examples: .context/archive/old-full-spec.md"
@@ -283,9 +276,9 @@ ask_list GOVERNING_CORPUS \
      .context/MILESTONES.md and root CLAUDE.md; add any other doc that is a
      contract rather than a note."
 
-# 8 -------------------------------------------------------------------------
+# 7 -------------------------------------------------------------------------
 ask_list DOMAIN_NEVER_ESCALATABLE \
-"8/9  Extra NEVER-ESCALATABLE rule ids. The harness already makes these never:
+"7/8  Extra NEVER-ESCALATABLE rule ids. The harness already makes these never:
      secrets, force push, base-branch push outside the ship flow, the governing
      corpus, and the control set. Add a rule id here only if lifting it could
      cause harm no revert undoes. Nothing you add here can ever be approved —
@@ -300,9 +293,9 @@ ask_list SECRET_EXEMPTIONS \
 "     Secret exemptions — files that LOOK like secrets and are safe (.env.example
      and friends)."
 
-# 9 -------------------------------------------------------------------------
+# 8 -------------------------------------------------------------------------
 ask ARBITER_LABEL \
-"9/9  Arbiter label — the third option on every Decision Card, the way you buy a
+"8/8  Arbiter label — the third option on every Decision Card, the way you buy a
      higher-tier opinion without having to form one yourself. It appears
      verbatim as a card option." \
   "$ARBITER_LABEL"
@@ -407,7 +400,7 @@ HDR
   printf '\n# --- walls (newline lists; empty is valid) ---------------------------------\n'
   for v in FORBIDDEN_EXEC_TOKENS FORBIDDEN_ARTIFACTS BANNED_READ_FILES \
            GOVERNING_CORPUS SECRET_PATTERNS SECRET_EXEMPTIONS \
-           SECURITY_BOUNDARY_FILES DOMAIN_NEVER_ESCALATABLE; do
+           DOMAIN_NEVER_ESCALATABLE; do
     eval "_val=\${$v:-}"
     emit_block "$v" "$_val"
   done

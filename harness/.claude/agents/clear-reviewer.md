@@ -103,8 +103,7 @@ Your reasoning in at most `CAP_CLEAR_VERDICT` words, **including the spot-check 
 line, **alone on its own line**, exactly one of:
 
 - `CLEAR` — the orchestrator proceeds.
-- `BLOCK: <numbered, actionable reasons>` — fix and re-checkpoint; at most `MAX_CHECKPOINT_BLOCKS` per
-  checkpoint.
+- `BLOCK: <numbered, actionable reasons>` — fix and re-checkpoint; at most 2 per checkpoint.
 - `ESCALATE: <reason>` — a Hard Stop, or something only the human can decide.
 
 The final line is parsed. Nothing follows it: no sign-off, no trailing note, no blank commentary.

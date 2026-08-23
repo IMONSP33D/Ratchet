@@ -69,7 +69,7 @@ everything you already have loaded, and its edits would move the artifact the bo
 - **Never document behaviour that does not exist yet**, and never let a doc drift from what the tests
   actually prove. A docstring describing an unimplemented milestone is a theater finding.
 - **Commit docs separately** from the implementation, so the board's subject and the doc updates are
-  distinct commits in the ship report. Keep commits scoped — a commit larger than `COMMIT_SCOPE_LINES`
+  distinct commits in the ship report. Keep commits scoped — a commit larger than roughly 400 lines
   is one nobody reviews line by line.
 
 ## Output — your completion report

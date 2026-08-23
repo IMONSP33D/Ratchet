@@ -83,13 +83,6 @@ id_rsa*}"
 SECRET_EXEMPTIONS="${SECRET_EXEMPTIONS:-.env.example
 .env.sample}"
 
-# --- SECURITY_BOUNDARY_FILES -----------------------------------------------------------------------
-# Hard Stop 1 files: the auth boundary, key storage, the redaction filter. These are not blanket-
-# denied (building them per spec is sanctioned work); they are the files whose modification the
-# reviewer and security-auditor are told to treat as security-relevant, and which auto-promote a
-# fast checkpoint to full.
-SECURITY_BOUNDARY_FILES="${SECURITY_BOUNDARY_FILES:-}"
-
 # --- DOMAIN_NEVER_ESCALATABLE ----------------------------------------------------------------------
 # Extra RULE IDS (not paths) that can never be lifted by an approval, on top of the harness-fixed
 # core in CONTRACT SS5.6. Use rule ids exactly as guard.sh/scope-guard.sh emit them; both scripts
@@ -156,10 +149,6 @@ ARBITER_LABEL="${ARBITER_LABEL:-Escalate to a higher-tier model}"
 # SECRET_EXEMPTIONS=".env.example
 # .env.sample"
 #
-# SECURITY_BOUNDARY_FILES="src/billing/gateway_auth.py
-# src/billing/key_store.py
-# src/logging/redaction.py"
-#
 # # Two extra ids the domain refuses to ever let an approval lift.
 # DOMAIN_NEVER_ESCALATABLE="forbidden-exec-tokens
 # forbidden-artifacts"
@@ -190,7 +179,7 @@ ARBITER_LABEL="${ARBITER_LABEL:-Escalate to a higher-tier model}"
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ] && [ "${1:-}" = "--selftest" ]; then
   printf 'domain.config.sh selftest\n  DOMAIN_NAME=%s\n' "$DOMAIN_NAME"
   for _v in FORBIDDEN_EXEC_TOKENS FORBIDDEN_ARTIFACTS BANNED_READ_FILES GOVERNING_CORPUS \
-            SECRET_PATTERNS SECRET_EXEMPTIONS SECURITY_BOUNDARY_FILES DOMAIN_NEVER_ESCALATABLE \
+            SECRET_PATTERNS SECRET_EXEMPTIONS DOMAIN_NEVER_ESCALATABLE \
             DOMAIN_LAWS DOMAIN_REVIEW_LENS DOMAIN_SECURITY_PASS ARBITER_LABEL; do
     eval "_val=\${$_v-__UNSET__}"
     if [ "$_val" = "__UNSET__" ]; then

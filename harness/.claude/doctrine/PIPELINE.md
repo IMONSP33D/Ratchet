@@ -4,9 +4,10 @@
 dispatched, what they receive, what they produce, what closes the stage, and which hooks fire.
 
 **Where it lives and who owns it.** `.claude/doctrine/PIPELINE.md`. Harness-owned doctrine, Tier 2b: it
-ships with Ratchet and is replaced wholesale on update. Agents MUST NOT edit it, and a human edit is
-reported by `ratchet-update.sh` and preserved as `PIPELINE.md.local-<timestamp>` rather than discarded.
-`CLAUDE.md` holds the law and wins any conflict with this file.
+ships with Ratchet and is replaced wholesale on update. Agents MUST NOT edit it, and a human edit
+survives an update untouched as long as upstream has not touched this file too (UPGRADING.md §2.2) —
+otherwise it is a conflict to merge by hand. `CLAUDE.md` holds the law and wins any conflict with this
+file.
 
 **Who reads it.** **Orchestrator only.** Delegated agents receive the delegation packet defined in
 `CLAUDE.md`, never this file.
@@ -215,8 +216,10 @@ Never proceed red. Never weaken a test to reach green.
 | `reviewer` | opus | Correctness · test integrity · loop budget · **mission trace** (every WIN row to real implementation and a passing named test) · **ledger trace** (every edge-case row to a test or a recorded deferral) · **claim verification** (a claim with no diff evidence is a finding) · theater scan | `.pipeline/reviewer-findings.md` |
 | `security-auditor` | opus | The SEC- requirements explicitly, plus dependency trust. **Always runs, on every diff.** Its CRITICAL/HIGH findings are never averaged away. The domain pack's security pass is injected into its definition. | `.pipeline/security-findings.md` |
 
-Raw outputs are one numbered finding per item, `1.` at line start — that is what `check_done.py`
-counts against the ledger.
+Raw outputs are one numbered finding per item, `1.` at line start. Through 2026-08-23 `check_done.py`
+counted that against the ledger row count (check 4, findings-ledger); that check was one of the 17
+cut when the checklist was trimmed to its two load-bearing checks. The format still matters for the
+`clear-reviewer`'s own reading of it.
 
 **Then you adjudicate**, under `CLAUDE.md`'s approval authority. Transcribe every finding into
 `.pipeline/findings.md` **before** adjudicating it, severity as filed, never edited. Simulate before
@@ -272,20 +275,22 @@ look at first.
    **You never transcribe a verdict.**
 4. Garbage collection fires after the clear-review, regardless of verdict (below).
 
-Blocks per checkpoint are capped at `MAX_CHECKPOINT_BLOCKS` (2). A third is yours to resolve, or a
+Blocks per checkpoint are capped at 2. A third is yours to resolve, or a
 Decision Card.
 
 ### FAST checkpoint — Stages 1, 3, 4, and each review-fix round
 
-You run it yourself, no sub-agents, into `.pipeline/checkpoints/<n>-<stage>-fast.md`: the checklist,
-each item's answer, and one verdict. Every item is script-decidable.
+You run it yourself, no sub-agents: the checklist, each item's answer, and one verdict. Every item is
+script-decidable. (Through 2026-08-23 this was logged to
+`.pipeline/checkpoints/<n>-<stage>-fast.md`; that artifact had zero readers anywhere in the harness
+and was cut — run the checklist and act on it, don't file it.)
 
 | # | Item |
 |---|---|
 | 1 | Deterministic gates for this stage: green? Paste the command and its exit status. |
 | 2 | Changed files ⊆ `plan-files.txt` + recorded amendments? |
 | 3 | Any test file modified outside `test-writer`'s Stage 3.1 authorship? |
-| 4 | Any security-adjacent path touched — `SECURITY_BOUNDARY_FILES`, key storage, the redaction path, `.claude/**`, CI config? |
+| 4 | Any security-adjacent path touched — auth, session, crypto, key storage, the redaction path, `.claude/**`, CI config? |
 | 5 | Any AV-register item contradicted by what was built? |
 | 6 | Any delta from the plan's partition map or frozen contracts? |
 | 7 | All new or changed public functions carry docstrings that document units and error modes? |
@@ -316,8 +321,10 @@ It:
   `DECISIONS.md`, `research.md`, `gap-analysis.md`, `plan-files.txt`, the ship report, validation-run
   journals, `docs/evidence/`, `.agent-development/`, or anything outside `.pipeline/`.
 
-Every delegated agent receives `context-live.md` (SessionStart injects it). Any agent resuming a
-broken run starts from `run-journal.md`.
+`context-live.md` reaches only the seats whose own `## Inputs` section names it — `architect`,
+`retro`, `scout`, `clear-reviewer`, `checkpoint-scribe` — because each reads it, not because
+`SessionStart` injects it into a subagent (that hook fires on session start/resume/clear, never on
+subagent dispatch). Any agent resuming a broken run starts from `run-journal.md`.
 
 ---
 
@@ -344,7 +351,7 @@ run is the one that closes the soak's WIN rows.
 
 ---
 
-## The control layer — 25 scripts in `.claude/hooks/`, plus 3 stack packs
+## The control layer — 24 scripts in `.claude/hooks/`, plus 3 stack packs
 
 Agents never edit any of these. Seven of them (`settings.json`, `guard.sh`, `scope-guard.sh`,
 `hooklib.sh`, `escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`) are the **control set**: Tier 2b
@@ -393,25 +400,27 @@ and the repeat-failure hash stop (**same failure twice with no diff change = imm
 `interview.sh` — generates the domain pack from nine questions; safe to re-run, and your previous
 answers become the defaults.
 
-### Libraries, config and checkers (7)
+### Libraries, config and checkers (6)
 
 `hooklib.sh` · `escalation-lib.sh` · `esc_payload.py` (derives the sha256 an approval binds to) ·
-`ratchet.config.sh` (core) · `domain.config.sh` (domain pack) · `check_done.py` (definition of done) ·
-`check_narrative.py` (narrative budget, name validation)
+`ratchet.config.sh` (core) · `domain.config.sh` (domain pack) · `check_done.py` (definition of done:
+two load-bearing checks as of 2026-08-23 — changed-file manifest, verify-gate artifact)
 
 ### The suite (1)
 
 `test_hooks.py` — tests all of the above, including that every embedded copy of the laws matches
-`_LAWS.md` and that the four hardcoded version strings agree.
+`_LAWS.md` and that the three hardcoded version strings agree.
 
 ### Stack packs — 3, in `.claude/hooks/stack/`
 
-`python-pytest.sh` · `node-jest.sh` · `generic.sh`. Not part of the 25: they sit one directory down
+`python-pytest.sh` · `node-jest.sh` · `generic.sh`. Not part of the 24: they sit one directory down
 and bind the command interface rather than implementing control.
 
-**8 + 7 + 2 + 7 + 1 = 25.** Change that arithmetic and change this heading in the same commit. A
+**8 + 7 + 2 + 6 + 1 = 24.** Change that arithmetic and change this heading in the same commit. A
 drifting count is how `interview.sh` and `esc_payload.py` went unlisted here for a whole release
-cycle — and an unlisted file is one nobody audits.
+cycle — and an unlisted file is one nobody audits. (`check_narrative.py` was removed 2026-08-23,
+along with the 17 non-load-bearing `check_done.py` checks; `install.ps1` was removed the same day,
+dropping the hardcoded-version-string count from four to three.)
 
 ---
 

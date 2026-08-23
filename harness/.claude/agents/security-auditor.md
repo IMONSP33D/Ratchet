@@ -31,15 +31,17 @@ reaches the network beyond what a scanner does on its own.
 
 The diff at the review SHA · the file manifest and amendments · `.pipeline/verify-last.json` ·
 `.pipeline/escalations/ledger.jsonl` and `.pipeline/escalations/` · `.claude/hooks/domain.config.sh`
-(for `SECRET_PATTERNS`, `SECURITY_BOUNDARY_FILES`, `DOMAIN_NEVER_ESCALATABLE`) · the stack pack for the
-scanner commands.
+(for `SECRET_PATTERNS`, `DOMAIN_NEVER_ESCALATABLE`) · the stack pack for the scanner commands.
 
 ## Procedure
 
 ### 1. Deterministic scanners — run them, report raw output verbatim
 
 The commands come from the installed **stack pack**, never from your own knowledge of what this
-ecosystem usually uses:
+ecosystem usually uses. `SECRETS_SCAN_CMD` and `DEP_AUDIT_CMD` are shell variables, not literal
+command names — `source .claude/hooks/ratchet.config.sh` (it sources the stack pack for you) and
+run `$SECRETS_SCAN_CMD` / `$DEP_AUDIT_CMD`, the resolved values, not the bare names in backticks
+above:
 
 - `SECRETS_SCAN_CMD` — the project's secret scan, over the whole tracked tree.
 - `DEP_AUDIT_CMD` — the project's dependency audit against the resolved lockfile.
@@ -77,12 +79,12 @@ closed.
 <!-- DOMAIN_SECURITY_PASS -->
 *(Default when no domain pack is installed — the installer replaces this block with
 `$DOMAIN_SECURITY_PASS`.)* **The project's own sacred surface, second pass.** Re-read every hunk that
-touches the files named in `SECURITY_BOUNDARY_FILES`, anything matching `SECRET_PATTERNS`, and any code
+touches auth, session, crypto, or key-storage code, anything matching `SECRET_PATTERNS`, and any code
 implementing the invariant law 4 names. In this pass the default severity is **CRITICAL**, not MEDIUM: a
-boundary file changed without the change being argued, an invariant enforced in one branch and not its
-sibling, or a limit read from a literal instead of config are all filed CRITICAL and the burden is on
-the run to argue them down. If the domain pack is empty, apply this pass to the harness's own protected
-surfaces — the secrets directory, the governing corpus, and the control set.
+security-boundary file changed without the change being argued, an invariant enforced in one branch and
+not its sibling, or a limit read from a literal instead of config are all filed CRITICAL and the burden
+is on the run to argue them down. If the domain pack is empty, apply this pass to the harness's own
+protected surfaces — the secrets directory, the governing corpus, and the control set.
 
 ### 5. Prompt-injection check
 
@@ -122,8 +124,7 @@ from it read a path no agent ever wrote, so the reconciliation never once ran �
 **Raw output shape (parsed):** one numbered item per finding, `1.` / `2.` at the **start of a line**.
 Each finding carries a **name** (kebab-case, 2–5 words, stating the problem — `signing-key-inside-repo`,
 not `sec-2`), a severity, `file:line`, the vulnerable pattern, and **the property a fix must satisfy —
-never the fix**. Names are permanent, never reused, and validated by `check_narrative.py
---validate-name`.
+never the fix**. Names are permanent, never reused, and validated by `rt_name_valid` (`hooklib.sh`).
 
 **Ledger row shape (frozen header):**
 

@@ -6,8 +6,9 @@ frozen format and rule you need is here. It holds no project content and is not 
 
 **Where it lives and who owns it.** `.claude/doctrine/TEMPLATE.md`. The harness owns it: it ships with
 Ratchet, it is identical in every project, and it is replaced wholesale on update. **Agents MUST NOT
-edit it**, and neither should the human — a local edit is drift, which `ratchet-update.sh` reports and
-preserves as `TEMPLATE.md.local-<timestamp>` before the new version lands.
+edit it**, and neither should the human — a local edit is drift, which `ratchet-update.sh` leaves in
+place until upstream changes this file too, at which point it is a conflict to merge by hand
+(UPGRADING.md §2.2).
 
 **How to use it.** Read it once, end to end, before writing a line. Then: interview the human (§0),
 gathering without composing; draft `SPEC.md` against §3 using the taxonomy in §2 and the AV register in
@@ -290,8 +291,10 @@ wrong. Goldens pin points; `TEST-P-` properties pin the shape between them.
 
 **Tests carry requirement ids** in their names, separators normalised to the language's identifier rules:
 `test_bucket_total_rounds_up_REQ_AGG_02`, `test_key_permissions_refused_SEC_02`. The id in the name is
-what the proof map, the mission trace and `check_done.py` follow; a requirement whose id appears in no
-test name is unproven regardless of how well it is implemented.
+what the proof map and the `reviewer`'s mission-trace lens follow; a requirement whose id appears in no
+test name is unproven regardless of how well it is implemented. (Through 2026-08-23 `check_done.py`'s
+win-rows check followed these too; it was one of the 17 cut when the checklist was trimmed to its two
+load-bearing checks.)
 
 **Selectors are load-bearing.** The architect freezes, per WIN row, the selector substring that row's
 verify command uses, and a test serving a row MUST contain that substring in its name. Renaming a test so
@@ -305,8 +308,8 @@ requirement ids; footer `DEC-nnn · <name>` when a decision was recorded in the 
 
 One green cycle = one commit (red → green → refactor → commit), not "one feature", not "one session".
 Reference requirement ids — that is how the mission trace reads history. A decision lands in the same
-commit as the change it authorises, never after. A diff exceeding `COMMIT_SCOPE_LINES` means cycles were
-batched; split it. Never `--no-verify`. The test-writer's red commit and the developer's green commit are
+commit as the change it authorises, never after. A diff exceeding roughly 400 lines means cycles were
+batched; split it (judgment call — nothing enforces this). Never `--no-verify`. The test-writer's red commit and the developer's green commit are
 separate commits by separate seats: one commit containing both is indistinguishable from test-after.
 
 ## 9. Frozen artifact formats (parsers read these)
@@ -350,8 +353,10 @@ the Stop gate and `check_done.py`, so a line satisfying one satisfies the other.
 **Checkpoints** — `.pipeline/checkpoints/`: `<n>-<stage>-jump.md` (`checkpoint-scribe`; 7 sections,
 ≤500 words) · `<n>-<stage>-evidence.txt` (`checkpoint-evidence.sh`; **script-written only**, never
 edited, never curated) · `<n>-<stage>-clear.md` (`clear-reviewer`; ≤200 words, names its spot-check and
-what it found, final line alone `CLEAR` / `BLOCK: <reasons>` / `ESCALATE: <reason>`) ·
-`<n>-<stage>-fast.md` (the orchestrator; the FAST checklist, each item answered, one verdict).
+what it found, final line alone `CLEAR` / `BLOCK: <reasons>` / `ESCALATE: <reason>`). The orchestrator
+runs the FAST checklist itself at the stages that need it, each item answered, one verdict — but does
+not file it: through 2026-08-23 that was `<n>-<stage>-fast.md`, the one checkpoint artifact with zero
+readers anywhere in the harness, and it was cut.
 
 **Ship consent** — `.pipeline/ship-consent.json`, written BEFORE the merge, with keys
 `pr` `head_sha` `base` `question` `options_offered` `answer` `answered_at`. `guard.sh` refuses a merge or a push to `{{BASE_BRANCH}}` unless the file exists and its `pr` and
