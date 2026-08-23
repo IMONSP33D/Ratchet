@@ -62,6 +62,7 @@ if hasattr(sys.stdout, "reconfigure"):  # CONTRACT 4.2 - first executable lines
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import ast
+import datetime
 import io
 import json
 import os
@@ -4416,6 +4417,364 @@ def build_suite(smoke_only=False, pattern=None, quick_only=False):
             continue
         out.addTest(t)
     return out
+
+
+# =================================================================================================
+# The dispatch attribution store  (audit F1)
+# =================================================================================================
+class TestVersionIsConsistentEverywhere(unittest.TestCase):
+    """One version, four independently hardcoded copies, previously no check.
+
+    VERSION, install.sh, install.ps1 and ratchet.config.sh each carry the number
+    separately. Bumping only VERSION was demonstrated to produce an install that
+    reports THREE different versions to three different readers -- and
+    session-start.sh injects RT_VERSION into the agent's own context, so the
+    agent is told which harness it is running. A version the agent is told
+    wrongly is a debugging trap that survives every other gate.
+
+    This test is the reason that cannot happen again. It fails on ANY divergence,
+    in either direction, so a partial bump is caught in the same commit that
+    makes it.
+    """
+
+    NEEDS_REPO = False
+
+    #: (path relative to the bundle root, regex capturing the version)
+    SITES = [
+        ("VERSION", r"^\s*(\d+\.\d+\.\d+)\s*$"),
+        ("install.sh", r'^RT_INSTALLER_VERSION="(\d+\.\d+\.\d+)"'),
+        ("install.ps1", r'^\$RtInstallerVersion\s*=\s*"(\d+\.\d+\.\d+)"'),
+        ("harness/.claude/hooks/ratchet.config.sh",
+         r'^RT_VERSION="\$\{RT_VERSION:-(\d+\.\d+\.\d+)\}"'),
+    ]
+
+    def bundle_root(self):
+        """The Ratchet SOURCE tree, which is only present when the suite runs
+        from it. In an INSTALLED repo there is no VERSION file or installer, so
+        this check does not apply and must skip rather than fail."""
+        here = Path(__file__).resolve()
+        for cand in list(here.parents):
+            if (cand / "VERSION").is_file() and (cand / "install.sh").is_file():
+                return cand
+        return None
+
+    def test_every_hardcoded_version_agrees(self):
+        root = self.bundle_root()
+        if root is None:
+            self.skipTest("not the Ratchet source bundle (installed repo): "
+                          "no VERSION/install.sh above this hooks dir")
+        found = {}
+        for rel, pat in self.SITES:
+            p = root / rel
+            if not p.is_file():
+                self.fail("version site missing from the bundle: %s" % rel)
+            m = re.search(pat, read(p), re.M)
+            self.assertIsNotNone(
+                m, "%s no longer matches its version pattern %r - either the "
+                   "line was reformatted (update SITES in the same commit) or "
+                   "the version was removed" % (rel, pat))
+            found[rel] = m.group(1)
+        distinct = sorted(set(found.values()))
+        self.assertEqual(
+            len(distinct), 1,
+            "the four hardcoded versions disagree: %s. Bump all of them, or the "
+            "install stamps one number and tells the agent another."
+            % ", ".join("%s=%s" % (k, v) for k, v in sorted(found.items())))
+
+    def test_the_check_can_fail(self):
+        """MISMATCHED PAYLOAD. A consistency check that has never seen an
+        inconsistent input is a check that can only pass. Drive the comparison
+        with a deliberately divergent set and require it to reject."""
+        fake = {"VERSION": "1.2.2", "install.sh": "1.2.1"}
+        self.assertNotEqual(
+            len(set(fake.values())), 1,
+            "the comparison used by test_every_hardcoded_version_agrees does "
+            "not distinguish divergent versions")
+
+
+class TestDispatchStoreIsNotAgentWritable(RepoCase):
+    """The partition glob IS the scope, so an agent that can write it has none.
+
+    `.pipeline/dispatch/<id>.glob` is the allow-list scope-guard checks a write
+    against, and `<id>.baseline` is the evidence the SubagentStop gates attribute
+    work with. Both used to sit in agent-writable scratch: only
+    `.pipeline/escalations/**` was denied, so the constrained agent could rewrite
+    its own lane and forge its own alibi, and every downstream check would then
+    agree with it. Reproduced before the fix as: blocked write -> widen glob to
+    `**` -> the identical write allowed.
+
+    Every test here is driven with BOTH verdicts: the store refuses the agent,
+    and the sanctioned writer still works. A rule that only ever says NO would
+    pass this file while breaking every dispatch.
+    """
+
+    def dispatch_paths(self):
+        return [
+            ".pipeline/dispatch/p1.glob",
+            ".pipeline/dispatch/p1.baseline",
+            ".pipeline/dispatch/p1.snapshot",
+            ".pipeline/dispatch/current",
+        ]
+
+    def test_scope_guard_refuses_every_dispatch_store_write(self):
+        need("scope-guard.sh")
+        self.start_run()
+        self.manifest("src/app.py")
+        for rel in self.dispatch_paths():
+            with self.subTest(path=rel):
+                r = self.hook("scope-guard.sh", {
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": rel, "content": "**"},
+                })
+                self.assertEqual(r.returncode, 2,
+                                 "%s was not refused: %s" % (rel, r.stderr))
+                self.assertIn("dispatch-store-write", r.stderr,
+                              "%s was refused under the wrong rule id" % rel)
+
+    def test_guard_refuses_dispatch_store_writes_by_effect(self):
+        """Not by verb: redirect, tee, cp and rm all reach the same wall."""
+        need("guard.sh")
+        self.start_run()
+        cmds = [
+            'echo "**" > .pipeline/dispatch/p1.glob',
+            'echo x | tee .pipeline/dispatch/p1.baseline',
+            'cp /tmp/x .pipeline/dispatch/current',
+            'rm -f .pipeline/dispatch/p1.baseline',
+            'sed -i s/a/b/ .pipeline/dispatch/p1.glob',
+        ]
+        for c in cmds:
+            with self.subTest(cmd=c):
+                r = self.hook("guard.sh", {
+                    "tool_name": "Bash", "tool_input": {"command": c}})
+                self.assertEqual(r.returncode, 2,
+                                 "not refused: %s\n%s" % (c, r.stderr))
+                self.assertIn("dispatch-store-write", r.stderr,
+                              "wrong rule id for: %s" % c)
+
+    def test_the_rule_is_never_escalatable(self):
+        """MISMATCHED PAYLOAD: a rule that classified as `confirmable` would let
+        a human approve a widening of the agent's own scope, which is the same
+        hole with a signature on it. Drive the classifier and require `never`."""
+        need("escalation-lib.sh")
+        r = self.sh('esc_classify dispatch-store-write',
+                    libs=("ratchet.config.sh", "escalation-lib.sh"))
+        self.assertEqual(r.stdout.strip(), "never",
+                         "dispatch-store-write must be never-escalatable, got: %r"
+                         % r.stdout.strip())
+        # the opposite verdict, to prove the classifier is not stuck on `never`
+        r2 = self.sh('esc_classify partition-glob-violation',
+                     libs=("ratchet.config.sh", "escalation-lib.sh"))
+        self.assertEqual(r2.stdout.strip(), "confirmable",
+                         "control test failed: the classifier answers `never` to "
+                         "everything, so the assertion above proves nothing")
+
+    def test_settings_denies_the_dispatch_store_too(self):
+        """The second layer. settings.json deny is what holds when guard.sh's
+        static analysis is fooled by indirection it cannot see through."""
+        p = self.tmp / ".claude/settings.json"
+        if not p.is_file():
+            self.skipTest("not built yet: .claude/settings.json")
+        deny = "\n".join(
+            str(x) for x in
+            json.loads(read(p)).get("permissions", {}).get("deny", []))
+        for tool in ("Write", "Edit"):
+            with self.subTest(tool=tool):
+                self.assertTrue(
+                    re.search(r"%s\(\./\.pipeline/dispatch/\*\*\)" % tool, deny),
+                    "no %s deny entry covers .pipeline/dispatch/** - the layer "
+                    "that survives guard-analysis bypasses is missing" % tool)
+
+    def test_the_sanctioned_writer_still_works(self):
+        """THE OPPOSITE VERDICT. dispatch-baseline.sh must still write the store,
+        and invoking it must still be allowed - otherwise this fix has replaced a
+        security hole with an outage."""
+        need("dispatch-baseline.sh", "guard.sh")
+        self.start_run()
+        r = subprocess.run(
+            [BASH, str(self.hooks_dir() / "dispatch-baseline.sh"), "p9", "src/**"],
+            capture_output=True, text=True, cwd=str(self.tmp),
+            env=self.env, timeout=120)
+        glob = self.tmp / ".pipeline/dispatch/p9.glob"
+        self.assertTrue(glob.is_file(),
+                        "dispatch-baseline.sh no longer writes its own store: %s"
+                        % (r.stderr or r.stdout))
+        self.assertIn("src/**", read(glob))
+        g = self.hook("guard.sh", {"tool_name": "Bash", "tool_input": {
+            "command": '.claude/hooks/dispatch-baseline.sh p9 "src/**"'}})
+        self.assertEqual(g.returncode, 0,
+                         "the guard now refuses the only sanctioned writer: %s"
+                         % g.stderr)
+
+    def test_unrelated_pipeline_scratch_is_still_writable(self):
+        """THE OPPOSITE VERDICT, second form: the new rule must not swallow the
+        rest of .pipeline/, which is the agent's thinking space by design."""
+        need("scope-guard.sh")
+        self.start_run()
+        self.manifest("src/app.py")
+        for rel in (".pipeline/context.md", ".pipeline/findings.md",
+                    ".pipeline/dispatches.md"):
+            with self.subTest(path=rel):
+                r = self.hook("scope-guard.sh", {
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": rel, "content": "x"}})
+                self.assertEqual(r.returncode, 0,
+                                 "%s should still be writable scratch: %s"
+                                 % (rel, r.stderr))
+
+
+# =================================================================================================
+# The metrics spine  (audit: run-token mismatch + reader/writer vocabulary drift)
+# =================================================================================================
+class TestMetricsActuallyCountRealEvents(RepoCase):
+    """run_metrics.py read a vocabulary no hook ever wrote, and scoped events by
+    a token no hook ever stamped. Either bug alone renders every counter null.
+
+    Both were invisible because the fixtures hand-wrote the READER's format. The
+    fixtures here are produced by the real writer (pipeline-event.sh) precisely
+    so a future divergence fails instead of passing.
+    """
+
+    def emit(self, etype, *kv):
+        p = self.hooks_dir() / "pipeline-event.sh"
+        if not p.is_file():
+            raise unittest.SkipTest("not built yet: pipeline-event.sh")
+        subprocess.run([BASH, str(p), etype] + list(kv),
+                       capture_output=True, text=True, cwd=str(self.tmp),
+                       env=self.env, timeout=60)
+
+    def metrics(self):
+        p = self.hooks_dir() / "run_metrics.py"
+        if not p.is_file():
+            raise unittest.SkipTest("not built yet: run_metrics.py")
+        r = subprocess.run([sys.executable, str(p), "--json"],
+                           capture_output=True, text=True, cwd=str(self.tmp),
+                           env=self.env, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_events_written_by_the_real_writer_are_attributed_to_this_run(self):
+        """The token bug: pipeline-event.sh stamps `r<epoch>`, the reader derived
+        `<milestone>@<epoch>`, and the comparison was `==`. Every real event was
+        bucketed as another run's and silently discarded."""
+        need("pipeline-event.sh", "run_metrics.py", "gc-prune.sh")
+        self.start_run(milestone="M1")
+        # Baseline first. start_run() backdates run-start AFTER gc-prune has
+        # already stamped its own run_start event, so that one event carries a
+        # stale token by fixture construction. Measuring the DELTA isolates the
+        # product's behaviour from the fixture's artefact - asserting on the
+        # total would encode the artefact as the expectation.
+        before = self.metrics()["notes"]
+        self.emit("dispatch_baseline", "dispatch=p1")
+        self.emit("guard_block", "rule=secrets-access", "tool=Bash")
+        after = self.metrics()["notes"]
+        self.assertEqual(after["events_other_run"], before["events_other_run"],
+                         "events written by the harness's own writer were "
+                         "discarded as another run's: %r -> %r" % (before, after))
+        self.assertEqual(after["events_this_run"] - before["events_this_run"], 2,
+                         "the two events just emitted were not attributed to "
+                         "this run: %r -> %r" % (before, after))
+
+    def test_counters_are_wired_to_the_emitted_vocabulary(self):
+        """MISMATCHED PAYLOAD in the strong sense: these are the exact type
+        strings the shell emits. A counter still pointing at the old canonical
+        vocabulary reads null here and fails."""
+        need("pipeline-event.sh", "run_metrics.py", "gc-prune.sh")
+        self.start_run(milestone="M1")
+        self.emit("dispatch_baseline", "dispatch=p1")
+        self.emit("guard_block", "rule=secrets-access", "tool=Bash")
+        self.emit("scope_block", "rule=partition-glob-violation", "path=src/x")
+        self.emit("subagent_gate_block", "dispatch=p1", "attempt=1")
+        self.emit("verify_ran", "tier=ship", "exit=1")
+        self.emit("verify_ran", "tier=ship", "exit=0")
+        c = self.metrics()["counters"]
+        expected = {
+            "dispatches_total": 1,
+            "guard_refusals": 2,       # guard_block + scope_block
+            "gate_blocks_total": 1,
+            "subagent_gate_blocks": 1,
+            "verify_runs": 2,
+            "verify_failures": 1,      # the nonzero-exit predicate
+        }
+        for k, want in expected.items():
+            with self.subTest(counter=k):
+                self.assertEqual(c.get(k), want,
+                                 "%s: expected %r, got %r - the counter is not "
+                                 "wired to the type the hooks emit"
+                                 % (k, want, c.get(k)))
+
+    def test_a_counter_nobody_emits_is_null_not_zero(self):
+        """The null-vs-zero contract, driven with its own opposite: an
+        uninstrumented counter must be null even though instrumented ones in the
+        same run are integers. Reporting 0 here would claim a measurement nobody
+        made."""
+        need("pipeline-event.sh", "run_metrics.py", "gc-prune.sh")
+        self.start_run(milestone="M1")
+        self.emit("dispatch_baseline", "dispatch=p1")
+        c = self.metrics()["counters"]
+        self.assertEqual(c.get("dispatches_total"), 1)
+        self.assertIsNone(c.get("lesson_recurrences"),
+                          "an uninstrumented counter must be null, not 0")
+
+    def test_human_wait_is_measured_and_excluded_from_stage_time(self):
+        """The number the work budget deliberately folds out, and which nothing
+        could see. A notification of a waiting class opens the wait; the next
+        event closes it. The gap must be charged to `human-wait`, NOT to whatever
+        stage happened to be open - misattributing an approval stall as slow
+        tests is worse than reporting nothing."""
+        need("run_metrics.py", "gc-prune.sh")
+        self.start_run(milestone="M1")
+        start = int(read(self.tmp / ".pipeline/run-start").strip().split("\n")[0])
+        tok = "r%d" % start
+
+        def line(off, etype, kv):
+            ts = datetime.datetime.utcfromtimestamp(start + off).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+            return json.dumps({"ts": ts, "type": etype, "run": tok,
+                               "milestone": "M1", "kv": kv})
+
+        write(self.tmp / ".pipeline/run-events.jsonl", "\n".join([
+            line(0, "run_start", {"milestone": "M1"}),
+            line(10, "subagent_suite_ran", {"exit": "0", "dispatch": "p1"}),
+            line(20, "notification",
+                 {"class": "permission-stall", "title": "needs approval"}),
+            line(620, "guard_allow_approved", {"rule": "delete-scope"}),
+            line(630, "stop_gate_pass", {"tier": "ship"}),
+        ]) + "\n")
+        t = self.metrics()["timing"]
+        self.assertEqual(t["human_wait_seconds"], 600,
+                         "the 10-minute approval stall was not measured: %r" % t)
+        self.assertEqual(t["human_wait_events"], 1)
+        stage = t["stage_seconds"] or {}
+        self.assertEqual(stage.get("human-wait"), 600,
+                         "human wait must be its own stage: %r" % stage)
+        self.assertNotEqual(stage.get("build-gate"), 600,
+                            "the wait was misattributed to the gate that "
+                            "happened to be open")
+
+    def test_an_unusable_timestamp_is_reported_not_swallowed(self):
+        """pipeline-event.sh writes the literal `unknown` when date(1) is absent.
+        Dropping such an event silently would understate every span; the count
+        must surface."""
+        need("run_metrics.py", "gc-prune.sh")
+        self.start_run(milestone="M1")
+        start = int(read(self.tmp / ".pipeline/run-start").strip().split("\n")[0])
+        tok = "r%d" % start
+        good = datetime.datetime.utcfromtimestamp(start).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        write(self.tmp / ".pipeline/run-events.jsonl", "\n".join([
+            json.dumps({"ts": good, "type": "run_start", "run": tok,
+                        "milestone": "M1", "kv": {}}),
+            json.dumps({"ts": "unknown", "type": "commit", "run": tok,
+                        "milestone": "M1", "kv": {}}),
+            json.dumps({"ts": good, "type": "stop_gate_pass", "run": tok,
+                        "milestone": "M1", "kv": {}}),
+        ]) + "\n")
+        m = self.metrics()
+        self.assertEqual(m["timing"]["unparseable_ts"], 1,
+                         "the unusable timestamp was swallowed rather than counted")
+        self.assertEqual(m["counters"].get("commits"), 1,
+                         "an event with a bad timestamp must still COUNT - only "
+                         "its timing contribution is unavailable")
 
 
 class _Deadline(Exception):

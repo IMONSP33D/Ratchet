@@ -2112,11 +2112,18 @@ def _mut_lessons(root):
 
 
 def _mut_metrics(root):
+    # Type strings are the WRITER's (pipeline-event.sh via the gates), not this
+    # reader's invention. They previously named a canonical vocabulary nothing
+    # emitted, so this "broken" input quietly stopped being broken -- the check
+    # passed on it and the selftest, which requires the opposite verdict, was
+    # the only thing that noticed. Drive it with what the hooks actually write.
     _w(os.path.join(root, ".pipeline", "run-events.jsonl"),
        "\n".join([
-           json.dumps({"ts": 1, "type": "gate_block", "kv": {"gate": "stop"}}),
-           json.dumps({"ts": 2, "type": "gate_block", "kv": {"gate": "stop"}}),
-           json.dumps({"ts": 3, "type": "instrument",
+           json.dumps({"ts": "2023-11-14T22:13:20Z", "type": "stop_gate_block",
+                       "kv": {"tier": "ship"}}),
+           json.dumps({"ts": "2023-11-14T22:13:30Z", "type": "stop_gate_block",
+                       "kv": {"tier": "ship"}}),
+           json.dumps({"ts": "2023-11-14T22:13:40Z", "type": "instrument",
                        "kv": {"counter": "dispatches_total"}}),
        ]) + "\n")
 
