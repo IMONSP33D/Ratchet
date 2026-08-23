@@ -65,37 +65,73 @@ CONFIG_KEYS = [
     "MAX_RUN_WALL_SECONDS", "HOOKS_DIR", "DEV_DIR",
 ]
 
-# name -> (event type, optional (kv-key, kv-value) filter, human label)
+# name -> (event type OR tuple of types, optional filter, human label)
+#
+# READER-WRITER RULE (CONTRACT §0.7). The type strings below MUST be types the
+# hooks actually emit. They were not, for the harness's entire first window:
+# every spec named a canonical vocabulary (`gate_block`, `refusal`, `verify`)
+# that no script ever wrote, so every counter rendered "not instrumented" while
+# the log filled with `stop_gate_block`, `guard_block` and `verify_ran`. The
+# fix is to name what is written. When you add an emitter, add its type HERE in
+# the same commit, and drive the counter with a fixture carrying that exact
+# string --- a counter whose type nobody emits is indistinguishable from a
+# counter measuring zero, which is the failure this comment exists to prevent.
+#
+# A filter is (kv-key, want) where `want` is compared case-insensitively, or one
+# of the predicates "nonzero"/"zero" (numeric on the kv value), or the prefix
+# form "BLOCK" retained for checkpoint verdicts.
 COUNTER_SPECS = [
-    ("dispatches_total", "dispatch", None, "subagent dispatches"),
-    ("gate_blocks_total", "gate_block", None, "gate blocks (all gates)"),
-    ("stop_gate_blocks", "gate_block", ("gate", "stop"), "stop-gate blocks"),
-    ("subagent_gate_blocks", "gate_block", ("gate", "subagent"),
+    ("dispatches_total", "dispatch_baseline", None, "subagent dispatches"),
+    ("gate_blocks_total",
+     ("stop_gate_block", "red_gate_block", "subagent_gate_block"), None,
+     "gate blocks (all gates)"),
+    ("stop_gate_blocks", "stop_gate_block", None, "stop-gate blocks"),
+    ("subagent_gate_blocks", "subagent_gate_block", None,
      "subagent-gate blocks"),
-    ("red_gate_blocks", "gate_block", ("gate", "red"), "red-gate blocks"),
-    ("guard_refusals", "refusal", None, "guard refusals"),
+    ("red_gate_blocks", "red_gate_block", None, "red-gate blocks"),
+    ("guard_refusals", ("guard_block", "scope_block"), None, "guard refusals"),
+    ("approvals_consumed", ("guard_allow_approved", "scope_allow_approved"),
+     None, "human approvals consumed"),
     ("escalation_requests", "escalation_request", None, "escalation requests"),
     ("escalation_approvals", "escalation_approved", None, "escalation approvals"),
-    ("disclosures", "disclosure", None, "disclosures granted"),
+    ("disclosures", ("disclosure", "red_gate_green_disclosed"), None,
+     "disclosures granted"),
     ("decision_cards", "decision_card", None, "decision cards asked"),
-    ("checkpoints_full", "checkpoint", ("kind", "full"), "FULL checkpoints"),
+    ("checkpoints_full", "checkpoint_evidence", None,
+     "FULL checkpoints (scripted evidence written)"),
     ("checkpoints_fast", "checkpoint", ("kind", "fast"), "FAST checkpoints"),
     ("checkpoint_blocks", "checkpoint_verdict", ("verdict", "BLOCK"),
      "checkpoint BLOCK verdicts"),
     ("review_rounds", "review_round", None, "review-fix rounds"),
     ("findings_filed", "finding_filed", None, "findings filed"),
-    ("verify_runs", "verify", None, "verify runs"),
-    ("verify_failures", "verify", ("result", "fail"), "verify failures"),
+    ("verify_runs", "verify_ran", None, "verify runs"),
+    ("verify_failures", "verify_ran", ("exit", "nonzero"), "verify failures"),
+    ("fast_suite_runs", "fast_suite_ran", None, "fast-suite runs"),
+    ("fast_suite_failures", "fast_suite_ran", ("exit", "nonzero"),
+     "fast-suite failures"),
+    ("gates_skipped_no_command",
+     ("verify_skipped", "fast_suite_skipped", "red_gate_skipped",
+      "subagent_suite_skipped"), None,
+     "gates SKIPPED for want of a stack command"),
+    ("retry_caps_exhausted",
+     ("stop_gate_cap_exhausted", "red_gate_cap_exhausted",
+      "subagent_gate_cap_exhausted"), None, "retry caps exhausted"),
+    ("repeat_failure_stops", "stop_gate_repeat_stop", None,
+     "repeat-failure stops (same failure, no diff)"),
+    ("budget_halts", "run_budget_halt", None, "work/wall budget halts"),
+    ("notifications", "notification", None, "notifications raised"),
     ("commits", "commit", None, "commits recorded by hooks"),
     ("lesson_recurrences", "lesson_recurred", None, "lessons that recurred"),
 ]
 
-# maps: counter name -> (event type, kv key used as the map key)
+# maps: counter name -> (event type OR tuple of types, kv key used as the map key)
 MAP_SPECS = [
-    ("dispatches_by_agent", "dispatch", "agent"),
-    ("gate_blocks_by_gate", "gate_block", "gate"),
-    ("refusals_by_rule", "refusal", "rule"),
+    ("dispatches_by_agent", "dispatch_baseline", "dispatch"),
+    ("gate_blocks_by_gate",
+     ("stop_gate_block", "red_gate_block", "subagent_gate_block"), "__type__"),
+    ("refusals_by_rule", ("guard_block", "scope_block"), "rule"),
     ("findings_by_severity", "finding_filed", "severity"),
+    ("notifications_by_class", "notification", "class"),
 ]
 
 
@@ -213,28 +249,45 @@ def git(root, *args):
 
 
 # ---------------------------------------------------------------------------
-# Run token --- prefer hooklib's rt_run_token so every component agrees.
+# Run token
+#
+# THE WRITER IS AUTHORITATIVE. pipeline-event.sh:198 stamps every event with
+# "r<RUN_START-epoch>", so that is the canonical token and this reader derives
+# the same string from the same file. It previously shelled out to a hooklib
+# function named rt_run_token that has never existed in the tree, silently fell
+# back to "<milestone>@<epoch>", and compared THAT against "r<epoch>" --- so
+# every event from every real run was bucketed as "another run's" and discarded.
+# Both failures were invisible because the selftest fixtures hand-wrote the
+# reader's format. Fixtures now use the writer's format; see test_run_token_*.
+#
+# run_token()  -> the canonical token to stamp on output.
+# token_set()  -> every form an on-disk event may legitimately carry, so a log
+#                 written before this fix still scopes correctly.
 # ---------------------------------------------------------------------------
+def _run_start_epoch(ctx):
+    return read_text(ctx.path("RUN_START") or "").strip().split("\n")[0].strip()
+
+
 def run_token(ctx):
-    hooks = ctx.path("HOOKS_DIR") or ctx.hooks_dir
-    lib = os.path.join(hooks, "hooklib.sh")
-    if os.path.isfile(lib):
-        try:
-            proc = subprocess.run(
-                ["bash", "-c",
-                 '. "$1" >/dev/null 2>&1 || exit 9; '
-                 'command -v rt_run_token >/dev/null 2>&1 || exit 8; rt_run_token',
-                 "bash", lib],
-                cwd=ctx.root, capture_output=True, text=True, timeout=60,
-                stdin=subprocess.DEVNULL,
-                env=dict(os.environ, CLAUDE_PROJECT_DIR=ctx.root))
-            if proc.returncode == 0 and proc.stdout.strip():
-                return proc.stdout.strip().split("\n")[-1].strip()
-        except Exception:
-            pass
+    start = _run_start_epoch(ctx)
+    if not start:
+        return "%s@unstarted" % (milestone_of(ctx) or "none")
+    return "r%s" % start
+
+
+def token_set(ctx):
+    """Accepted run tokens, newest convention first. Legacy form kept so a log
+    written before the token repair is still attributable rather than silently
+    dropped."""
+    start = _run_start_epoch(ctx)
     milestone = milestone_of(ctx) or "none"
-    start = read_text(ctx.path("RUN_START") or "").strip().split("\n")[0].strip()
-    return "%s@%s" % (milestone, start or "unstarted")
+    toks = set()
+    if start:
+        toks.add("r%s" % start)
+        toks.add("%s@%s" % (milestone, start))
+    else:
+        toks.add("%s@unstarted" % milestone)
+    return toks
 
 
 def milestone_of(ctx):
@@ -253,7 +306,7 @@ def load_events(ctx):
     mine, other, unscoped, malformed = [], 0, 0, 0
     if not p or not os.path.isfile(p):
         return mine, other, unscoped, malformed
-    token = run_token(ctx)
+    tokens = token_set(ctx)
     for line in read_text(p).split("\n"):
         s = line.strip()
         if not s:
@@ -270,7 +323,7 @@ def load_events(ctx):
         if not r:
             unscoped += 1
             mine.append(obj)
-        elif r == token:
+        elif r in tokens:
             mine.append(obj)
         else:
             other += 1
@@ -296,41 +349,63 @@ def declared_instrumented(events):
     return names
 
 
+def _types(etype):
+    """A spec's event type may be one string or a tuple of them."""
+    return (etype,) if isinstance(etype, str) else tuple(etype)
+
+
+def _filter_ok(ev, filt):
+    if not filt:
+        return True
+    k, want = filt
+    got = str(kv_of(ev).get(k, ""))
+    if want == "nonzero" or want == "zero":
+        try:
+            v = int(float(got))
+        except ValueError:
+            return False          # unmeasurable is not a match, either way
+        return (v != 0) if want == "nonzero" else (v == 0)
+    if want == "BLOCK":
+        return got.upper().startswith("BLOCK")
+    return got.lower() == want.lower()
+
+
 def roll(ctx, events, other, unscoped, malformed):
     declared = declared_instrumented(events)
     types_seen = set(ev.get("type") for ev in events)
 
     counters = {}
     for name, etype, filt, _label in COUNTER_SPECS:
-        instrumented = (etype in types_seen) or (name in declared)
+        want_types = _types(etype)
+        instrumented = bool(types_seen.intersection(want_types)) or (name in declared)
         if not instrumented:
             counters[name] = None            # null: nobody measured this
             continue
         n = 0
         for ev in events:
-            if ev.get("type") != etype:
+            if ev.get("type") not in want_types:
                 continue
-            if filt:
-                k, want = filt
-                got = str(kv_of(ev).get(k, ""))
-                if want == "BLOCK":
-                    if not got.upper().startswith("BLOCK"):
-                        continue
-                elif got.lower() != want.lower():
-                    continue
+            if not _filter_ok(ev, filt):
+                continue
             n += 1
         counters[name] = n
 
     maps = {}
     for name, etype, key in MAP_SPECS:
-        if etype not in types_seen:
+        want_types = _types(etype)
+        if not types_seen.intersection(want_types):
             maps[name] = None
             continue
         bucket = {}
         for ev in events:
-            if ev.get("type") != etype:
+            if ev.get("type") not in want_types:
                 continue
-            k = str(kv_of(ev).get(key, "")) or "(unlabelled)"
+            # "__type__" buckets by the event type itself --- used where the
+            # distinction lives in the type name rather than in a kv field.
+            if key == "__type__":
+                k = str(ev.get("type"))
+            else:
+                k = str(kv_of(ev).get(key, "")) or "(unlabelled)"
             bucket[k] = bucket.get(k, 0) + 1
         maps[name] = bucket
 
@@ -340,6 +415,8 @@ def roll(ctx, events, other, unscoped, malformed):
     # ledger rows are a direct measurement of the findings file
     counters["findings_ledger_rows"] = ledger_rows(ctx)
     counters["checkpoint_files"] = checkpoint_files(ctx)
+    # speed --- derived from event timestamps; see timing() for the contract
+    counters.update(timing_counters(events))
 
     notes = {
         "events_this_run": len(events),
@@ -351,6 +428,189 @@ def roll(ctx, events, other, unscoped, malformed):
         "null_means": "not instrumented; 0 means measured zero",
     }
     return counters, maps, notes
+
+
+# ---------------------------------------------------------------------------
+# Speed --- derived, never self-reported
+#
+# The events log already timestamps every gate firing; nothing read those
+# timestamps, so a run could report 8 hours of work with no way to say where a
+# minute of it went. Everything below is a PURE READER over `ts` fields, which
+# means it costs no new instrumentation and cannot be gamed by an agent that
+# does not also forge the log.
+#
+# Resolution is ONE SECOND (pipeline-event.sh writes %H:%M:%SZ), so a duration
+# under a second reads as 0 --- measured-zero, not missing. An unparseable `ts`
+# (pipeline-event writes the literal "unknown" when `date` is absent) drops that
+# event from timing rather than poisoning a span, and is counted in
+# `timing_unparseable_ts` so the omission is visible instead of silent.
+#
+# HUMAN WAIT is the number the work budget deliberately folds out and therefore
+# the one nobody could see. A `notification` of class escalation or
+# permission-stall opens a wait; the next event of any type closes it. That is a
+# lower bound: a wait still open when the log ends is not counted, because
+# guessing its end would be inventing a number.
+# ---------------------------------------------------------------------------
+TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
+# Epoch as a naive UTC datetime. The stamps are always Z, so subtracting gives
+# UTC seconds without importing calendar (not on the CONTRACT 0.2 allow-list)
+# and without time.mktime, which would silently apply the machine's local zone
+# and shift every duration by the UTC offset.
+_EPOCH = datetime.datetime(1970, 1, 1)
+
+# Events that mark the boundary of a pipeline stage, in the order a run meets
+# them. The label is what renders; the tuple is the event types that open it.
+STAGE_MARKERS = [
+    ("arm", ("run_start", "run_reopen")),
+    ("dispatch", ("dispatch_baseline",)),
+    ("red-gate", ("red_gate_ran", "red_gate_pass", "red_gate_block")),
+    ("build-gate", ("subagent_suite_ran", "subagent_gate_pass",
+                    "subagent_gate_block")),
+    ("checkpoint", ("checkpoint_evidence",)),
+    ("verify", ("verify_ran", "fast_suite_ran")),
+    ("stop-gate", ("stop_gate_pass", "stop_gate_block",
+                   "stop_gate_repeat_stop")),
+    ("archive", ("run_archive",)),
+]
+
+WAIT_OPENING_CLASSES = ("escalation", "permission-stall")
+
+
+def _ts(ev):
+    """Epoch seconds for an event, or None when the stamp is unusable."""
+    raw = str(ev.get("ts", "")).strip()
+    if not raw or raw == "unknown":
+        return None
+    try:
+        return int((datetime.datetime.strptime(raw, TS_FMT)
+                    - _EPOCH).total_seconds())
+    except (ValueError, TypeError):
+        return None
+
+
+def _ordered(events):
+    """Events carrying a usable timestamp, oldest first, plus the reject count.
+
+    Sorted by (ts, original index) so equal one-second stamps keep log order ---
+    without the index the sort would be unstable across Python versions and the
+    spans would wobble run to run.
+    """
+    keyed = []
+    bad = 0
+    for i, ev in enumerate(events):
+        t = _ts(ev)
+        if t is None:
+            bad += 1
+            continue
+        keyed.append((t, i, ev))
+    keyed.sort(key=lambda x: (x[0], x[1]))
+    return keyed, bad
+
+
+def timing(events):
+    """Return the full timing block: spans, per-stage seconds, human wait."""
+    keyed, bad = _ordered(events)
+    out = {
+        "stage_seconds": None,
+        "dispatch_seconds": None,
+        "human_wait_seconds": None,
+        "human_wait_events": None,
+        "human_wait_open_at_end": None,
+        "longest_gap_seconds": None,
+        "longest_gap_after": None,
+        "instrumented_span_seconds": None,
+        "unparseable_ts": bad,
+    }
+    if len(keyed) < 2:
+        return out
+
+    out["instrumented_span_seconds"] = keyed[-1][0] - keyed[0][0]
+
+    # --- per-stage: attribute each inter-event gap to the stage last opened ---
+    opener = {}
+    for label, types in STAGE_MARKERS:
+        for t in types:
+            opener[t] = label
+    stage = {}
+    current = None
+    for idx in range(len(keyed) - 1):
+        ts_now, _, ev = keyed[idx]
+        ts_next = keyed[idx + 1][0]
+        current = opener.get(ev.get("type"), current)
+        # A gap that opens with a notification is a HUMAN waiting, not the stage
+        # working. Charging it to whichever stage happened to be open last is how
+        # a 40-minute approval stall gets reported as slow tests --- the exact
+        # misattribution that makes a speed number worse than no number.
+        if (ev.get("type") == "notification"
+                and str(kv_of(ev).get("class", "")).lower()
+                in WAIT_OPENING_CLASSES):
+            stage["human-wait"] = stage.get("human-wait", 0) + (ts_next - ts_now)
+            continue
+        if current is None:
+            continue
+        stage[current] = stage.get(current, 0) + (ts_next - ts_now)
+    if stage:
+        out["stage_seconds"] = stage
+
+    # --- per-dispatch: baseline written -> that dispatch's gate verdict --------
+    opened = {}
+    spans = {}
+    for ts_now, _, ev in keyed:
+        et = ev.get("type")
+        did = str(kv_of(ev).get("dispatch", "")).strip()
+        if not did:
+            continue
+        if et == "dispatch_baseline":
+            opened[did] = ts_now
+        elif et in ("subagent_gate_pass", "red_gate_pass",
+                    "subagent_gate_block", "red_gate_block") and did in opened:
+            spans[did] = ts_now - opened.pop(did)
+    if spans:
+        out["dispatch_seconds"] = spans
+
+    # --- human wait: notification -> next event of any type -------------------
+    waited = 0
+    waits = 0
+    open_at_end = 0
+    for idx, (ts_now, _, ev) in enumerate(keyed):
+        if ev.get("type") != "notification":
+            continue
+        if str(kv_of(ev).get("class", "")).lower() not in WAIT_OPENING_CLASSES:
+            continue
+        if idx + 1 >= len(keyed):
+            open_at_end += 1      # still waiting when the log ends; not counted
+            continue
+        waited += keyed[idx + 1][0] - ts_now
+        waits += 1
+    out["human_wait_seconds"] = waited
+    out["human_wait_events"] = waits
+    out["human_wait_open_at_end"] = open_at_end
+
+    # --- the single biggest gap, which is where an investigation starts -------
+    widest = -1
+    after = None
+    for idx in range(len(keyed) - 1):
+        gap = keyed[idx + 1][0] - keyed[idx][0]
+        if gap > widest:
+            widest = gap
+            after = keyed[idx][2].get("type")
+    if widest >= 0:
+        out["longest_gap_seconds"] = widest
+        out["longest_gap_after"] = after
+    return out
+
+
+# Counters lifted out of timing() into the flat counter block, so the trend
+# view and the contradiction checks can reach them like any other number.
+TIMING_COUNTERS = [
+    "human_wait_seconds", "human_wait_events", "longest_gap_seconds",
+    "instrumented_span_seconds",
+]
+
+
+def timing_counters(events):
+    t = timing(events)
+    return dict((k, t.get(k)) for k in TIMING_COUNTERS)
 
 
 def _int_file(path):
@@ -546,10 +806,15 @@ def render_markdown(metrics):
     labels.update({"work_seconds": "work seconds (idle folded out)",
                    "wall_seconds": "wall seconds",
                    "findings_ledger_rows": "findings ledger rows",
-                   "checkpoint_files": "checkpoint jump summaries on disk"})
+                   "checkpoint_files": "checkpoint jump summaries on disk",
+                   "human_wait_seconds": "human wait seconds (lower bound)",
+                   "human_wait_events": "human waits observed",
+                   "longest_gap_seconds": "longest single gap (seconds)",
+                   "instrumented_span_seconds":
+                       "first-to-last event span (seconds)"})
     for name in [n for n, _t, _f, _l in COUNTER_SPECS] + \
                 ["work_seconds", "wall_seconds", "findings_ledger_rows",
-                 "checkpoint_files"]:
+                 "checkpoint_files"] + TIMING_COUNTERS:
         lines.append("| %s | %s |" % (labels.get(name, name), fmt(c.get(name))))
     lines.append("")
     for mname, bucket in sorted((metrics.get("maps") or {}).items()):
@@ -563,6 +828,33 @@ def render_markdown(metrics):
             for k in sorted(bucket):
                 lines.append("- `%s`: %d" % (k, bucket[k]))
         lines.append("")
+    tm = metrics.get("timing") or {}
+    lines.append("**Where the time went** *(derived from event timestamps; "
+                 "1-second resolution. Human wait is a LOWER bound --- a wait "
+                 "still open when the log ends is not counted.)*")
+    lines.append("")
+    stage = tm.get("stage_seconds")
+    if stage is None:
+        lines.append("- --- *(not instrumented: fewer than two timestamped events)*")
+    else:
+        total = sum(stage.values()) or 1
+        for k in sorted(stage, key=lambda x: -stage[x]):
+            lines.append("- `%s`: %ds (%d%%)"
+                         % (k, stage[k], round(100.0 * stage[k] / total)))
+    disp = tm.get("dispatch_seconds")
+    if disp:
+        lines.append("- per-dispatch: " + ", ".join(
+            "`%s` %ds" % (k, disp[k]) for k in sorted(disp)))
+    if tm.get("longest_gap_seconds") is not None:
+        lines.append("- longest single gap: %ds, immediately after `%s`"
+                     % (tm["longest_gap_seconds"], tm.get("longest_gap_after")))
+    if tm.get("human_wait_open_at_end"):
+        lines.append("- %d wait(s) still open when the log ended (excluded)"
+                     % tm["human_wait_open_at_end"])
+    if tm.get("unparseable_ts"):
+        lines.append("- %d event(s) dropped from timing: unusable timestamp"
+                     % tm["unparseable_ts"])
+    lines.append("")
     es = metrics.get("end_state")
     lines.append("**End state**")
     lines.append("")
@@ -606,6 +898,7 @@ def build(ctx, with_end_state=False):
         "generated_at": utc_now_iso(),
         "counters": counters,
         "maps": maps,
+        "timing": timing(events),
         "end_state": end_state,
         "notes": notes,
     }
@@ -635,7 +928,10 @@ SIDECAR_RE = re.compile(r"^(\d{3,})-.+\.json$")
 TREND_COLUMNS = [
     ("escalation_requests", "esc"),
     ("red_gate_blocks", "red-gate"),
+    ("gate_blocks_total", "blocks"),
     ("work_seconds", "work-s"),
+    ("human_wait_seconds", "wait-s"),
+    ("verify_runs", "verify-n"),
 ]
 
 
@@ -747,16 +1043,20 @@ def selftest():
                    "\n".join(json.dumps(e) for e in events) + "\n")
             return root
 
-        token = "M1@1700000000"
+        # The token and the type strings below are the WRITER's, copied from
+        # pipeline-event.sh. They used to be the reader's own invention, which
+        # is why neither the token mismatch nor the vocabulary drift was ever
+        # caught here: the selftest agreed with the bug.
+        token = "r1700000000"
         clean_events = [
-            {"ts": 1, "type": "dispatch", "run": token, "milestone": "M1",
-             "kv": {"agent": "developer"}},
-            {"ts": 2, "type": "dispatch", "run": token, "milestone": "M1",
-             "kv": {"agent": "test-writer"}},
-            {"ts": 3, "type": "gate_block", "run": token, "milestone": "M1",
-             "kv": {"gate": "stop"}},
-            {"ts": 4, "type": "instrument", "run": token, "milestone": "M1",
-             "kv": {"counter": "decision_cards"}},
+            {"ts": "2023-11-14T22:13:20Z", "type": "dispatch_baseline",
+             "run": token, "milestone": "M1", "kv": {"dispatch": "p1"}},
+            {"ts": "2023-11-14T22:13:30Z", "type": "dispatch_baseline",
+             "run": token, "milestone": "M1", "kv": {"dispatch": "p2"}},
+            {"ts": "2023-11-14T22:14:20Z", "type": "stop_gate_block",
+             "run": token, "milestone": "M1", "kv": {"tier": "ship"}},
+            {"ts": "2023-11-14T22:14:30Z", "type": "instrument",
+             "run": token, "milestone": "M1", "kv": {"counter": "decision_cards"}},
         ]
         root = build_repo("clean", clean_events)
         ctx = make_ctx(repo_root=root)
@@ -785,9 +1085,11 @@ def selftest():
 
         # FAIL case: gate blocks with zero dispatches (both instrumented)
         bad_events = [
-            {"ts": 1, "type": "gate_block", "run": token, "kv": {"gate": "stop"}},
-            {"ts": 2, "type": "gate_block", "run": token, "kv": {"gate": "stop"}},
-            {"ts": 3, "type": "instrument", "run": token,
+            {"ts": "2023-11-14T22:13:20Z", "type": "stop_gate_block",
+             "run": token, "kv": {"tier": "ship"}},
+            {"ts": "2023-11-14T22:13:30Z", "type": "stop_gate_block",
+             "run": token, "kv": {"tier": "ship"}},
+            {"ts": "2023-11-14T22:13:40Z", "type": "instrument", "run": token,
              "kv": {"counters": "dispatches_total"}},
         ]
         root2 = build_repo("bad", bad_events)
@@ -800,10 +1102,10 @@ def selftest():
 
         # per-run scoping: a previous run's events must never be counted
         stale_events = [
-            {"ts": 1, "type": "dispatch", "run": "M0@1600000000",
-             "kv": {"agent": "developer"}},
-            {"ts": 2, "type": "dispatch", "run": "M0@1600000000",
-             "kv": {"agent": "developer"}},
+            {"ts": "2020-09-13T12:26:40Z", "type": "dispatch_baseline",
+             "run": "r1600000000", "kv": {"dispatch": "p1"}},
+            {"ts": "2020-09-13T12:26:50Z", "type": "dispatch_baseline",
+             "run": "r1600000000", "kv": {"dispatch": "p2"}},
         ]
         root3 = build_repo("stale", stale_events)
         ctx3 = make_ctx(repo_root=root3)
@@ -819,7 +1121,7 @@ def selftest():
 
         # metrics file from a different run must be rebuilt, not merged
         _write(os.path.join(root3, ".pipeline", "run-metrics.json"),
-               json.dumps({"run": "M0@1600000000",
+               json.dumps({"run": "r1600000000",
                            "counters": {"dispatches_total": 99}}))
         m4 = build(ctx3, with_end_state=False)
         write_metrics(ctx3, m4)
@@ -918,13 +1220,20 @@ def main(argv=None):
 
     if args.list:
         for name, etype, filt, label in COUNTER_SPECS:
-            print("%-24s <- %-20s %s" % (name, etype, label))
+            print("%-26s <- %-52s %s" % (name, "|".join(_types(etype)), label))
         for name, etype, key in MAP_SPECS:
-            print("%-24s <- %-20s map by kv.%s" % (name, etype, key))
-        print("%-24s <- %s" % ("work_seconds", "RUN_START/RUN_IDLE (read-only)"))
-        print("%-24s <- %s" % ("wall_seconds", "RUN_START (read-only)"))
-        print("%-24s <- %s" % ("findings_ledger_rows", "FINDINGS table"))
-        print("%-24s <- %s" % ("checkpoint_files", "CHECKPOINTS_DIR"))
+            print("%-26s <- %-52s map by kv.%s"
+                  % (name, "|".join(_types(etype)), key))
+        print("%-26s <- %s" % ("work_seconds", "RUN_START/RUN_IDLE (read-only)"))
+        print("%-26s <- %s" % ("wall_seconds", "RUN_START (read-only)"))
+        print("%-26s <- %s" % ("findings_ledger_rows", "FINDINGS table"))
+        print("%-26s <- %s" % ("checkpoint_files", "CHECKPOINTS_DIR"))
+        for name in TIMING_COUNTERS:
+            print("%-26s <- %s" % (name, "derived from event ts (read-only)"))
+        print("%-26s <- %s" % ("timing.stage_seconds",
+                               "derived from event ts (read-only)"))
+        print("%-26s <- %s" % ("timing.dispatch_seconds",
+                               "derived from event ts (read-only)"))
         return 0
 
     if args.selftest:
