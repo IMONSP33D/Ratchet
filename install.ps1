@@ -110,6 +110,14 @@ param(
     [string]   $Domain         = 'none',
     [ValidateSet('light', 'strict')]
     [string]   $EscalationMode = 'light',
+    # Parity with install.sh --verify, and it defaults to `quick` for the reason
+    # install.sh already documents: Windows spawns processes roughly an order of
+    # magnitude slower than POSIX, and this suite is almost entirely spawns, so
+    # the FULL tier runs ~25 minutes here. This installer previously ran the full
+    # suite unconditionally, uncapped, with no way to ask for less -- exactly what
+    # the bash installer goes out of its way NOT to inflict on Windows users.
+    [ValidateSet('quick', 'smoke', 'full', 'none')]
+    [string]   $Verify         = 'quick',
     [string]   $BaseBranch     = '',
     [switch]   $Force,
     [switch]   $Uninstall,
@@ -130,7 +138,7 @@ $ErrorActionPreference = 'Continue'   # NOT Stop: a failed optional step is
                                       # reported, never allowed to abort a
                                       # half-finished install silently.
 
-$RtInstallerVersion = "1.2.1"
+$RtInstallerVersion = "1.2.2"
 $script:Warnings    = 0
 $script:MissingFiles = New-Object System.Collections.Generic.List[string]
 $script:HostFatal   = $false
@@ -1201,6 +1209,14 @@ Copy-HarnessTree '.claude/agents'      'replace'
 # project and replaced unconditionally, so an update actually refreshes them.
 Copy-HarnessTree '.claude/doctrine'    'replace'
 
+# The release-commit template. Harness-owned, replaced on upgrade like the rest
+# of .claude/. Wiring it to git is a separate, separately-reversible step below,
+# because a user who already has their own commit.template must keep it.
+$rtTplSrc = Join-Path $HarnessDir '.claude/commit-template.txt'
+if (Copy-HarnessFile $rtTplSrc '.claude/commit-template.txt' 'replace') {
+    Write-Ok '.claude/commit-template.txt'
+}
+
 Write-RtSub 'Human-owned contracts (.context\)'
 $ctxSrc = Join-Path $HarnessDir '.context'
 if (Test-Path -LiteralPath $ctxSrc) {
@@ -1263,7 +1279,14 @@ function Get-ShellVar {
     if (-not (Test-Path -LiteralPath $File)) { return '' }
     if (-not $script:BashPath) { return '' }
     $posix = ($File -replace '\\', '/')
-    $out = & $script:BashPath -c ". '$posix' >/dev/null 2>&1; printf '%s' `"`${$Name:-}`"" 2>$null
+    # Build the bash snippet by CONCATENATION, not interpolation. Inside a
+    # double-quoted PowerShell string, `$Name:` is parsed as a namespaced
+    # variable reference (the `$env:PATH` form), so the bash default-expansion
+    # `"${NAME:-}"` is a hard PARSE error -- and PowerShell parses the whole file
+    # before executing any of it, which meant this one line made the entire
+    # Windows installer unrunnable. Concatenation has no such ambiguity.
+    $snippet = ". '$posix' >/dev/null 2>&1; printf '%s' " + '"${' + $Name + ':-}"'
+    $out = & $script:BashPath -c $snippet 2>$null
     if ($LASTEXITCODE -ne 0) { return '' }
     return ("$out")
 }
@@ -1866,10 +1889,42 @@ saying what they did. Nothing here is ever deleted; a closed row is evidence.
 }
 
 # ===========================================================================
+# SECTION 11.5 -- RELEASE-COMMIT TEMPLATE
+#
+# Points git at .claude/commit-template.txt so a human running `git commit` with
+# no -m gets the "Version X.X.X: ..." release form pre-filled. Mirrors
+# install.sh section 11.5 exactly: repo-LOCAL, never overwrites an existing
+# commit.template, and does not touch the agent's commit path (in-run commits use
+# `git commit -m`, which never opens an editor and so never reads a template).
+# ===========================================================================
+if ($WhatIfPreference) {
+    Write-Dry 'git config commit.template .claude/commit-template.txt'
+} elseif (-not $Uninstall) {
+    Push-Location $TargetPath
+    $existingTpl = (& git config --local --get commit.template 2>$null)
+    if (-not $existingTpl) {
+        & git config --local commit.template '.claude/commit-template.txt' 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok 'git commit.template -> .claude/commit-template.txt (repo-local)'
+        } else {
+            Write-Warn 'could not set commit.template; set it yourself with:'
+            Write-Cont '  git config --local commit.template .claude/commit-template.txt'
+        }
+    } elseif ($existingTpl.Trim() -eq '.claude/commit-template.txt') {
+        Write-Ok 'git commit.template already points at the Ratchet template'
+    } else {
+        Write-Ok ("git commit.template left as-is ({0}) -- yours, not ours" -f $existingTpl.Trim())
+        Write-Cont '  Ratchet''s release template is at .claude/commit-template.txt if you want it.'
+    }
+    Pop-Location
+}
+
+# ===========================================================================
 # SECTION 12 -- VERIFICATION
 # ===========================================================================
 $verifyRc = 0
 $verifyState = 'not run'
+if ($Verify -eq 'none') { $SkipVerify = $true }
 if (-not $SkipVerify -and -not $WhatIfPreference) {
     Write-RtPhase 7 'Install verification'
     $th = Join-Path $TargetPath '.claude\hooks\test_hooks.py'
@@ -1879,8 +1934,24 @@ if (-not $SkipVerify -and -not $WhatIfPreference) {
         $pyExe = $pyParts[0]
         $pyPre = @()
         if ($pyParts.Length -gt 1) { $pyPre = $pyParts[1..($pyParts.Length - 1)] }
-        Start-RtSlowStep 'running the hook suite (this is the slow step)'
-        $out = & $pyExe @pyPre '.claude/hooks/test_hooks.py' 2>&1
+        # Tier + budget, matching install.sh. Without these this step was the
+        # FULL suite, uncapped: ~25 minutes on Windows by the codebase's own
+        # measurement, with no output until it finished.
+        $verifyArgs = @()
+        switch ($Verify) {
+            'quick' { $verifyArgs += '--quick' }
+            'smoke' { $verifyArgs += '--smoke' }
+            default { }
+        }
+        $verifyBudget = if ($env:RATCHET_VERIFY_BUDGET) { $env:RATCHET_VERIFY_BUDGET } else { '420' }
+        $verifyArgs += @('--brief', '--max-seconds', $verifyBudget)
+        if ($Verify -eq 'full') {
+            Write-Warn 'the full suite on Windows is very slow (~25 min: process spawn, not the gates).'
+            Write-Cont '  Consider -Verify quick here, and run the full suite once when you can leave it.'
+            Write-Cont '  Override the cap with RATCHET_VERIFY_BUDGET=<seconds>.'
+        }
+        Start-RtSlowStep ("running the hook suite, {0} tier (this is the slow step)" -f $Verify)
+        $out = & $pyExe @pyPre '.claude/hooks/test_hooks.py' @verifyArgs 2>&1
         $verifyRc = $LASTEXITCODE
         Stop-RtSlowStep
         Pop-Location

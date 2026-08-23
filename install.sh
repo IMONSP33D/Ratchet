@@ -54,7 +54,7 @@ set -uo pipefail
 # NOT set -e. A failed optional step must be REPORTED, not silently abort a
 # half-finished install. Every step that matters checks its own exit status.
 
-RT_INSTALLER_VERSION="1.2.1"
+RT_INSTALLER_VERSION="1.2.2"
 # Install verification tier: quick (default, ~25s) | full (~95s) | smoke (~1s) | none.
 # Quick is every security wall and meta-invariant. Full is the whole suite and is
 # what you run once, and after any control-layer change.
@@ -1130,6 +1130,12 @@ copy_tree ".claude/agents"      replace
 # ones that are written if-absent.
 copy_tree ".claude/doctrine"    replace
 
+# The release-commit template. Harness-owned, replaced on upgrade like the rest
+# of .claude/. Wiring it to git is a separate, separately-reversible step below,
+# because a user who already has their own commit.template must keep it.
+copy_file "$HARNESS_DIR/.claude/commit-template.txt" ".claude/commit-template.txt" replace \
+  >/dev/null && ok ".claude/commit-template.txt"
+
 # ------------------------------------------------------------- 5.3 context --
 # Human-owned. Written ONLY when absent -- an upgrade must never rewrite a SPEC.
 # .context/ holds exactly three contracts: SPEC.md, MILESTONES.md, DECISIONS.md
@@ -1386,9 +1392,20 @@ $SECRET_DENY"
         MERGED="$GEN.merged"
         if jq -s '
             def hookcmds: [ .. | objects | select(has("command")) | .command ];
-            def merge_event(old; new):
-              (old // []) + [ new[] | select( (.hooks // []) as $h
-                  | ([ $h[].command ] - [ (old // []) | .[]? | .hooks[]?.command ]) | length > 0 ) ];
+            # $-BOUND PARAMETERS ARE LOAD-BEARING. In jq, def f(a; b) binds a and
+            # b as CLOSURES, re-evaluated against whatever the input happens to
+            # be at each use site. Inside [ new[] | select(...) ] that input is
+            # one NEW hook-group object, so an unbound `old` re-evaluated there
+            # was null, the subtraction removed nothing, length > 0 was always
+            # true, and every re-install appended a full duplicate set of hook
+            # registrations -- eight guard.sh entries after four installs, each
+            # firing on every tool call. $old and $new are VALUES, bound once.
+            # Reproduce the old behaviour with:
+            #   jq -n "def f(o;n): [ n[] | (o|type) ]; {a:[1,2]} | f(.a; [{}])"
+            #   => ["null"]
+            def merge_event($old; $new):
+              ($old // []) + [ $new[] | select( (.hooks // []) as $h
+                  | ([ $h[].command ] - [ ($old // [])[]? | .hooks[]?.command ]) | length > 0 ) ];
             .[0] as $old | .[1] as $new
             | $old
             | .permissions.defaultMode = ($new.permissions.defaultMode // $old.permissions.defaultMode)
@@ -1822,10 +1839,56 @@ PHAROWS
 fi
 
 # ============================================================================
+# SECTION 11.5 — RELEASE-COMMIT TEMPLATE
+#
+# Points git at .claude/commit-template.txt so a human running `git commit`
+# with no -m gets the "Version X.X.X: ..." release form pre-filled.
+#
+# Three deliberate properties:
+#   1. It is repo-LOCAL (`git config` without --global). Ratchet never edits a
+#      user's global git configuration.
+#   2. An existing commit.template is NEVER overwritten. If the user already has
+#      one, that is a deliberate choice and this step says so and moves on.
+#   3. It does not touch the agent's commit path at all. In-run commits are made
+#      with `git commit -m` (one Conventional Commit per green cycle, CLAUDE.md),
+#      and -m never opens an editor, so it never reads a template. The two
+#      formats cannot collide. Note also that guard.sh refuses `git config` to
+#      the agent (rule git-config-write) -- this is the installer acting as the
+#      human, which is the only party that may set it.
+# ============================================================================
+if [ "$DRY_RUN" = "1" ]; then
+  dry "git config commit.template .claude/commit-template.txt"
+elif [ "$UNINSTALL" != "1" ]; then
+  EXISTING_TPL="$(git -C "$TARGET" config --local --get commit.template 2>/dev/null || true)"
+  if [ -z "$EXISTING_TPL" ]; then
+    if git -C "$TARGET" config --local commit.template ".claude/commit-template.txt" 2>/dev/null; then
+      ok "git commit.template -> .claude/commit-template.txt (repo-local)"
+    else
+      warn "could not set commit.template; set it yourself with:"
+      say  "        git config --local commit.template .claude/commit-template.txt"
+    fi
+  elif [ "$EXISTING_TPL" = ".claude/commit-template.txt" ]; then
+    ok "git commit.template already points at the Ratchet template"
+  else
+    ok "git commit.template left as-is ($EXISTING_TPL) -- yours, not ours"
+    say "        Ratchet's release template is at .claude/commit-template.txt if you want it."
+  fi
+fi
+
+# ============================================================================
 # SECTION 12 — VERIFICATION
 # ============================================================================
 VERIFY_RC=0
 VERIFY_STATE="not run"
+
+# Resolve `none` BEFORE the guard below reads RUN_VERIFY. This flag used to fall
+# through to the same empty VERIFY_FLAG as `full` and then skip the budget cap,
+# so asking for NO verification ran the slowest possible verification, uncapped.
+# Zeroing RUN_VERIFY *inside* the `if` that has already tested it is equally
+# ineffective -- which is exactly what the first attempt at this fix did, and why
+# this line sits here rather than in the case below.
+if [ "$VERIFY_TIER" = "none" ]; then RUN_VERIFY=0; fi
+
 if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
   rt_phase 7 "Install verification"
   VERIFY_FLAG=""
@@ -1833,7 +1896,7 @@ case "$VERIFY_TIER" in
   quick) VERIFY_FLAG="--quick" ;;
   smoke) VERIFY_FLAG="--smoke" ;;
   full)  VERIFY_FLAG="" ;;
-  none)  VERIFY_FLAG="" ;;
+  none)  VERIFY_FLAG="" ;;   # unreachable: RUN_VERIFY was zeroed above
   *) warn "unknown --verify tier '$VERIFY_TIER'; using quick."; VERIFY_TIER=quick; VERIFY_FLAG="--quick" ;;
 esac
 
