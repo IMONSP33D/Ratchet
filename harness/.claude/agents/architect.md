@@ -122,8 +122,8 @@ been asserted**, and the `reviewer` files it as a finding.
   wrong. Record each erratum in the amendment log with its trigger.
 - **The one-home rule: write each decision's story exactly once.** Its home is the DEC archive body,
   `.context/archive/decisions/DEC-nnn-full.md`. An amendment-log row and a fired-risk annotation carry
-  **the trigger, one sentence, and the DEC id and name** — nothing more. Checked by
-  `check_narrative.py` through `check_done.py`.
+  **the trigger, one sentence, and the DEC id and name** — nothing more. (Through 2026-08-23 checked
+  by `check_narrative.py` through `check_done.py`; both were cut, so this is presently self-policed.)
 
   This is a correctness control with a token saving attached, and the order matters. Two tellings of one
   decision have already diverged in a real corpus — the `one-decision-told-twice` lesson records a

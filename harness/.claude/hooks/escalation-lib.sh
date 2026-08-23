@@ -1259,7 +1259,7 @@ esc_control_selftest() {
     _esc_run_component "$s" "$t" bash "$hd/$s" --selftest || rc=1
   done
   if [ -n "$py" ]; then
-    for s in esc_payload.py check_done.py check_narrative.py; do
+    for s in esc_payload.py check_done.py; do
       [ -r "$hd/$s" ] || continue
       grep -q -- '--selftest' "$hd/$s" 2>/dev/null || continue
       _esc_run_component "$s" "$t" "$py" "$hd/$s" --selftest || rc=1

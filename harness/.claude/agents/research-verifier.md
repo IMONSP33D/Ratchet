@@ -117,7 +117,7 @@ What you attacked and why it held. Required even when nothing died.
 **Row names follow the naming doctrine** (§6): kebab-case, 2–5 words, stating the problem —
 `citation-does-not-support-claim`, not `issue-3`. Generic names (`fix-issue`, `misc-problem`, anything
 matching `^(fix|update|change|misc|various|general|temp|new|old)-`) are rejected mechanically by
-`check_narrative.py --validate-name`. Names are permanent and never reused.
+`rt_name_valid` (`hooklib.sh`). Names are permanent and never reused.
 
 ## A note on your own success criteria
 

@@ -136,7 +136,6 @@ EXPECTED_HOOKS = [
     "escalate.sh",
     "approve.sh",
     "check_done.py",
-    "check_narrative.py",
     "proof_map.py",
     "run_metrics.py",
     "test_hooks.py",
@@ -2807,9 +2806,6 @@ class TestCheckDrivenWithMismatchedPayload(GateCase):
     a payload requiring the opposite verdict.
     """
 
-    def check_narrative(self, *args):
-        return self.py("check_narrative.py", *args)
-
     def test_one_amendments_file_satisfies_both_consumers(self):
         """The Stop gate and check_done.py share one parser (CONTRACT 7.6).
         Before that, NO content satisfied both: whole-line matching needed a bare
@@ -2835,58 +2831,11 @@ class TestCheckDrivenWithMismatchedPayload(GateCase):
             "check_done.py rejected the same amendments file the Stop gate accepted",
         )
 
-    def test_negative_a_violation_on_a_LATER_line_is_still_found(self):
-        """The defect exactly: the reader looked at line 1. Put the violation on
-        row five and see whether the checker is reading the file or the first
-        line of it."""
-        need("check_narrative.py")
-        rows = [
-            "| name | source | severity as filed | file:line | finding | disposition | rationale | DEC |",
-            "|---|---|---|---|---|---|---|---|",
-        ]
-        for i in range(4):
-            rows.append(
-                "| clean-row-%d | reviewer | LOW | src/app.py:%d | a small thing | FIXED | fixed inline | |"
-                % (i, i + 1)
-            )
-        rows.append(
-            "| accepted-without-a-decision | reviewer | HIGH | src/app.py:9 | a real defect | "
-            "ACCEPTED | %s | |" % ("word " * 120)
-        )
-        write(self.tmp / ".pipeline/findings.md", "\n".join(rows) + "\n")
-        r = self.check_narrative("--json")
-        if not r.stdout.strip():
-            self.skipTest("check_narrative.py --json produced no output")
-        blob = r.stdout + r.stderr
-        self.assertIn(
-            "accepted-without-a-decision",
-            blob,
-            "a violation on row five was not seen. The reader is not reaching the "
-            "payload, and every green it has ever produced means nothing.",
-        )
-
-    def test_a_clean_ledger_passes_the_same_reader(self):
-        """The other half. A checker that fails everything is as useless as one
-        that passes everything, and much more annoying."""
-        need("check_narrative.py")
-        write(
-            self.tmp / ".pipeline/findings.md",
-            "| name | source | severity as filed | file:line | finding | disposition | rationale | DEC |\n"
-            "|---|---|---|---|---|---|---|---|\n"
-            "| gate-blames-wrong-actor | reviewer | HIGH | src/app.py:3 | wrong actor | FIXED | "
-            "fixed in the same commit | |\n"
-            "| slow-path-accepted | security | MEDIUM | src/app.py:9 | slow path | ACCEPTED | "
-            "cost outweighs benefit this milestone | DEC-004 |\n",
-        )
-        r = self.check_narrative("--json")
-        if not r.stdout.strip():
-            self.skipTest("check_narrative.py --json produced no output")
-        self.assertNotIn("gate-blames-wrong-actor", r.stdout + r.stderr)
-
-    def test_the_two_name_validators_agree(self):
-        """Shell and python implement CONTRACT 6 separately; a divergence here is
-        the reader-writer class in its purest form."""
-        TestNamingDoctrineRoundTrip.assert_agreement(self)
+    # test_negative_a_violation_on_a_LATER_line_is_still_found,
+    # test_a_clean_ledger_passes_the_same_reader, and test_the_two_name_validators_agree
+    # exercised check_narrative.py, removed 2026-08-23 along with the 17 non-load-bearing
+    # check_done.py checks (decisions doc). See TestNamingDoctrineRoundTrip for the
+    # surviving rt_name_valid coverage.
 
 
 class TestCommitScopeMustBeDeclared(GateCase):
@@ -2933,30 +2882,9 @@ class TestCommitScopeMustBeDeclared(GateCase):
         self.stage(3)
         self.assertNotEqual(self.guard_run('git commit -m "tidy"').returncode, BLOCK)
 
-    def test_the_findings_ledger_reconciles_against_the_boards_raw_output(self):
-        need("check_done.py")
-        write(
-            self.tmp / ".pipeline/reviewer-findings.md",
-            "1. first defect\n2. second defect\n3. third defect\n",
-        )
-        write(self.tmp / ".pipeline/security-findings.md", "1. a security defect\n")
-        write(
-            self.tmp / ".pipeline/findings.md",
-            "| name | source | severity as filed | file:line | finding | disposition | rationale | DEC |\n"
-            "|---|---|---|---|---|---|---|---|\n"
-            "| first-defect | reviewer | LOW | a.py:1 | x | FIXED | fixed | |\n"
-            "| second-defect | reviewer | LOW | a.py:2 | x | FIXED | fixed | |\n",
-        )
-        self.start_run()
-        r = self.py("check_done.py", "--json")
-        if not r.stdout.strip():
-            self.skipTest("check_done.py --json produced no output")
-        self.assertRegex(
-            r.stdout + r.stderr,
-            r"(?i)(findings|ledger|reconcil|count)",
-            "the board filed 4 findings and the ledger carries 2; nothing objected. "
-            "That is a self-account nobody audited.",
-        )
+    # test_the_findings_ledger_reconciles_against_the_boards_raw_output exercised
+    # check_done.py's findings-ledger check (4), removed 2026-08-23 with the other
+    # 16 non-load-bearing checks (decisions doc).
 
 
 class TestDisclosedRedHasAHome(GateCase):
@@ -3205,24 +3133,8 @@ class TestPendingActionsAreRankedAndPrinted(GateCase):
             "is the whole point of it being a register",
         )
 
-    def test_a_probe_transcript_in_a_ledger_cell_is_rejected(self):
-        need("check_narrative.py")
-        write(
-            self.tmp / ".pipeline/findings.md",
-            "| name | source | severity as filed | file:line | finding | disposition | rationale | DEC |\n"
-            "|---|---|---|---|---|---|---|---|\n"
-            "| pasted-a-transcript | reviewer | LOW | a.py:1 | x | FIXED | %s | |\n"
-            % ("$ pytest -q ... 41 passed in 3.10s ... $ git diff --stat ... 12 files changed " * 3),
-        )
-        r = self.py("check_narrative.py", "--json")
-        if not r.stdout.strip():
-            self.skipTest("check_narrative.py --json produced no output")
-        self.assertIn(
-            "pasted-a-transcript",
-            r.stdout + r.stderr,
-            "a probe transcript pasted into a ledger cell was accepted; output belongs "
-            "in docs/evidence/ with the cell citing the path",
-        )
+    # test_a_probe_transcript_in_a_ledger_cell_is_rejected exercised check_narrative.py,
+    # removed 2026-08-23 along with the 17 non-load-bearing check_done.py checks.
 
 
 class TestClearVerdictIsSelfWritten(GateCase):
@@ -3263,49 +3175,12 @@ class TestClearVerdictIsSelfWritten(GateCase):
         body = read(f)
         self.assertIn("app.py", body, "the evidence must be the VERBATIM diff, not a description")
 
-    def test_a_checkpoint_with_evidence_but_no_verdict_fails(self):
-        need("check_done.py")
-        self.start_run()
-        self.checkpoint(clear=None)
-        r = self.py("check_done.py", "--json")
-        if not r.stdout.strip():
-            self.skipTest("check_done.py --json produced no output")
-        self.assertRegex(
-            r.stdout + r.stderr,
-            r"(?i)(checkpoint|verdict|clear)",
-            "a checkpoint with evidence and no self-written verdict passed",
-        )
-
-    def test_negative_a_verdict_outside_the_closed_vocabulary_fails(self):
-        """The mismatched payload. 'Looks good to me' is not a verdict; the final
-        line is CLEAR, BLOCK: <reasons>, or ESCALATE: <reason> and nothing else."""
-        need("check_done.py")
-        self.start_run()
-        self.checkpoint(clear="I read the evidence and it all looks good to me.\n\nLOOKS GOOD\n")
-        r = self.py("check_done.py", "--json")
-        if not r.stdout.strip():
-            self.skipTest("check_done.py --json produced no output")
-        self.assertRegex(
-            r.stdout + r.stderr,
-            r"(?i)(verdict|CLEAR|vocabulary|final line)",
-            "a checkpoint whose final line was 'LOOKS GOOD' was accepted as a verdict",
-        )
-
-    def test_a_proper_verdict_naming_its_spot_check_passes(self):
-        need("check_done.py")
-        self.start_run()
-        self.checkpoint(
-            clear="I spot-checked the summary's claim that only one file changed against "
-            "1-contracts-evidence.txt: the diff stat shows one file, which matches.\n\nCLEAR\n"
-        )
-        r = self.py("check_done.py", "--json")
-        if not r.stdout.strip():
-            self.skipTest("check_done.py --json produced no output")
-        self.assertNotRegex(
-            r.stdout + r.stderr,
-            r"(?i)1-contracts.*(missing|absent)",
-            "a well-formed verdict was rejected",
-        )
+    # test_a_checkpoint_with_evidence_but_no_verdict_fails,
+    # test_negative_a_verdict_outside_the_closed_vocabulary_fails, and
+    # test_a_proper_verdict_naming_its_spot_check_passes exercised check_done.py's
+    # checkpoints check (10), removed 2026-08-23 with the other 16 non-load-bearing
+    # checks (decisions doc). The `clear-reviewer` seat still writes its own verdict
+    # (self-policed, see the next test) but check_done.py no longer verifies it.
 
     def test_the_clear_reviewer_seat_is_told_to_write_its_own_verdict(self):
         f = self.tmp / ".claude/agents/clear-reviewer.md"
@@ -3324,14 +3199,19 @@ class TestClearVerdictIsSelfWritten(GateCase):
 # NAMING DOCTRINE ROUND TRIP (CONTRACT 6)
 # --------------------------------------------------------------------------
 class TestNamingDoctrineRoundTrip(GateCase):
-    """`rt_name_valid` (shell) and `check_narrative.py --validate-name` (python)
-    implement the SAME rules. Two implementations of one rule is the
-    reader-writer class waiting to happen, so they are compared item by item on
-    a shared fixture list rather than each tested against its own idea.
+    """`rt_name_valid` (`hooklib.sh`) implements CONTRACT 6's naming rules.
 
-    `expected=None` means the fixture exists to test AGREEMENT only - the two
-    must give the same answer even where the contract's regex is arguably at
-    odds with usage elsewhere in the harness.
+    Through 2026-08-23 a second, independent Python implementation --
+    `check_narrative.py --validate-name` -- was compared against it item by
+    item on this same fixture list, on the theory that two implementations of
+    one rule is the reader-writer class waiting to happen. That script was
+    cut along with the 17 non-load-bearing `check_done.py` checks, so this
+    class now tests the one surviving implementation against the frozen
+    contract directly.
+
+    `expected=None` fixtures were agreement-only checks against the removed
+    second implementation and are no longer exercised; kept in the list for
+    provenance.
     """
 
     FIXTURES = [
@@ -3393,36 +3273,6 @@ class TestNamingDoctrineRoundTrip(GateCase):
             raise unittest.SkipTest("hooklib exposes no rt_name_valid")
         return r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "INVALID"
 
-    @staticmethod
-    def python_verdict(case, name):
-        r = case.py("check_narrative.py", "--validate-name", name)
-        if "unrecognized arguments" in (r.stderr or ""):
-            raise unittest.SkipTest("check_narrative.py has no --validate-name mode")
-        return "VALID" if r.returncode == 0 else "INVALID"
-
-    @classmethod
-    def assert_agreement(cls, case):
-        need("hooklib.sh", "check_narrative.py")
-        disagree = []
-        for name, _ in cls.FIXTURES:
-            s = cls.shell_verdict(case, name)
-            p = cls.python_verdict(case, name)
-            if s != p:
-                disagree.append("%-45s shell=%s python=%s" % (name, s, p))
-        case.assertEqual(
-            disagree,
-            [],
-            "rt_name_valid and check_narrative.py --validate-name disagree. CONTRACT 6 "
-            "says they implement the SAME rules; a divergence means one caller is "
-            "filing names the other will later reject:\n  " + "\n  ".join(disagree),
-        )
-
-    def test_the_shell_and_python_validators_agree_item_by_item(self):
-        # Deliberately NOT in --smoke: 40 fixtures x 2 interpreters is ~80
-        # process launches, and the smoke subset has a wall-clock budget it is
-        # measured against on every session start.
-        self.assert_agreement(self)
-
     def test_the_shell_validator_matches_the_frozen_contract(self):
         need("hooklib.sh")
         wrong = []
@@ -3434,29 +3284,12 @@ class TestNamingDoctrineRoundTrip(GateCase):
                 wrong.append("%-45s expected=%s got=%s" % (name, expected, got))
         self.assertEqual(wrong, [], "rt_name_valid disagrees with CONTRACT 6:\n  " + "\n  ".join(wrong))
 
-    def test_the_python_validator_matches_the_frozen_contract(self):
-        need("check_narrative.py")
-        wrong = []
-        for name, expected in self.FIXTURES:
-            if expected is None:
-                continue
-            got = self.python_verdict(self, name) == "VALID"
-            if got != expected:
-                wrong.append("%-45s expected=%s got=%s" % (name, expected, got))
-        self.assertEqual(
-            wrong,
-            [],
-            "check_narrative.py --validate-name disagrees with CONTRACT 6:\n  " + "\n  ".join(wrong),
-        )
-
-    def test_negative_the_validators_reject_as_well_as_accept(self):
-        """A validator that says yes to everything agrees with one that says yes
-        to everything. Prove both discriminate before trusting the agreement."""
-        need("hooklib.sh", "check_narrative.py")
+    def test_negative_the_validator_rejects_as_well_as_accepts(self):
+        """A validator that says yes to everything is useless. Prove it
+        discriminates before trusting any PASS it produces."""
+        need("hooklib.sh")
         self.assertEqual(self.shell_verdict(self, "gate-blames-wrong-actor"), "VALID")
         self.assertEqual(self.shell_verdict(self, "fix-issue"), "INVALID")
-        self.assertEqual(self.python_verdict(self, "gate-blames-wrong-actor"), "VALID")
-        self.assertEqual(self.python_verdict(self, "fix-issue"), "INVALID")
 
     def test_every_seeded_lesson_name_passes_the_validator(self):
         """The names in ACTIVE-LESSONS.md are filed under CONTRACT 6 and are
@@ -4066,300 +3899,12 @@ class TestSeededLessonNamesResolve(NoRepoCase):
         self.assertEqual(wrong, [], "lesson -> class bindings drifted:\n  " + "\n  ".join(wrong))
 
 
-class TestLessonParserToleratesWriterDrift(unittest.TestCase):
-    """The lesson parser is the reader half of a reader-writer pair whose #1
-    historical failure is silent drift (reader-writer-drift, run-000). These
-    are the NEXT drift classes, each proven against the real parser in-process:
-
-      1. an `assert:` written as a markdown bullet and/or bold/blockquote still
-         binds its test (the shipped style is a bare or backtick-wrapped line;
-         the retro/consolidated templates render asserts inside bullets/tables);
-      2. a category is MUST-FIX only when MUST-FIX is the START of its name --- a
-         "## Watch --- demoted from MUST-FIX" heading is a WATCH category and
-         must not be gated;
-      3. a milestone id matches as a whole token --- run M1 is not "recurred"
-         by a note that merely mentions M10-M19.
-    """
-
-    @classmethod
-    def _cd(cls):
-        # Load check_done.py into a private namespace WITHOUT importing it as a
-        # module: the suite's own CONTRACT 0.2 forbids non-stdlib import lines,
-        # and a sibling-module import reads as one. exec of the source (read via
-        # the suite's encoding-safe `read`) keeps this test inside the same
-        # rules it enforces. __name__ is not "__main__", so main() never runs.
-        if getattr(cls, "_CD_NS", None) is None:
-            src = read(HOOKS / "check_done.py")
-            ns = {"__name__": "ratchet_check_done",
-                  "__file__": str(HOOKS / "check_done.py")}
-            exec(compile(src, str(HOOKS / "check_done.py"), "exec"), ns)
-
-            class _Mod(object):
-                def __init__(self, d):
-                    self.__dict__ = d
-            cls._CD_NS = _Mod(ns)
-        return cls._CD_NS
-
-    def _ctx(self, cd, root, lessons_text, run_active="M1"):
-        adev = os.path.join(root, ".agent-development")
-        os.makedirs(adev, exist_ok=True)
-        with open(os.path.join(adev, "ACTIVE-LESSONS.md"), "w",
-                  encoding="utf-8") as f:
-            f.write(lessons_text)
-        pipe = os.path.join(root, ".pipeline")
-        os.makedirs(pipe, exist_ok=True)
-        with open(os.path.join(pipe, "run-active"), "w", encoding="utf-8") as f:
-            f.write(run_active + "\n")
-        cfg = {
-            "ACTIVE_LESSONS": ".agent-development/ACTIVE-LESSONS.md",
-            "RUN_ACTIVE": ".pipeline/run-active",
-            "EVENTS_LOG": ".pipeline/events.jsonl",
-        }
-        return cd.Ctx(str(HOOKS), root, None, cfg, tier="intermediate")
-
-    def test_bulleted_and_emphasised_assert_lines_still_bind(self):
-        cd = self._cd()
-        styles = [
-            "`assert: TestBare`",
-            "- `assert: TestBullet`",
-            "* assert: TestStar",
-            "> `assert: TestQuote`",
-            "**assert:** TestBold",
-        ]
-        for i, style in enumerate(styles):
-            d = tempfile.mkdtemp(prefix="ratchet-lesson-")
-            try:
-                text = ("# Active lessons\n\n## MUST-FIX --- ways it broke\n\n"
-                        "### drift-lesson-%d\nA thing that must hold.\n%s\n" % (i, style))
-                ctx = self._ctx(cd, d, text)
-                lessons, _ = cd.parse_lessons(ctx)
-                self.assertEqual(len(lessons), 1, "style %r did not parse" % style)
-                self.assertTrue(lessons[0]["must_fix"])
-                self.assertTrue(
-                    lessons[0]["test"],
-                    "style %r bound no test -- an unbindable MUST-FIX is enforced "
-                    "against nothing" % style)
-                self.assertNotIn("`", lessons[0]["test"])
-                self.assertNotIn("*", lessons[0]["test"])
-            finally:
-                shutil.rmtree(d, ignore_errors=True)
-
-    def test_watch_category_mentioning_must_fix_is_not_gated(self):
-        cd = self._cd()
-        d = tempfile.mkdtemp(prefix="ratchet-lesson-")
-        try:
-            text = ("# Active lessons\n\n"
-                    "## Watch --- demoted from MUST-FIX at consolidation 001-005\n\n"
-                    "### watch-only-lesson\nKeep an eye on this; no test yet.\n")
-            ctx = self._ctx(cd, d, text)
-            lessons, _ = cd.parse_lessons(ctx)
-            self.assertEqual(len(lessons), 1)
-            self.assertFalse(
-                lessons[0]["must_fix"],
-                "a WATCH category was gated as MUST-FIX because its heading names "
-                "its own provenance -- an assert-less watch lesson now fails the gate")
-        finally:
-            shutil.rmtree(d, ignore_errors=True)
-
-    def test_milestone_recurrence_match_is_whole_token(self):
-        cd = self._cd()
-        # A lesson noting it recurred in M11 must NOT flag run M1.
-        d = tempfile.mkdtemp(prefix="ratchet-lesson-")
-        try:
-            text = ("# Active lessons\n\n## MUST-FIX --- ways it broke\n\n"
-                    "### some-lesson\nBody.\n`assert: TestX`\n"
-                    "recurred-in: M11 a different milestone entirely\n")
-            ctx = self._ctx(cd, d, text, run_active="M1")
-            ctx.metrics = lambda: {"run": "M1"}
-            names = cd.lessons_recurred_this_run(ctx)
-            self.assertNotIn(
-                "some-lesson", names,
-                "run M1 was flagged as a recurrence by an M11 note -- substring "
-                "milestone matching falsely reds the gate")
-        finally:
-            shutil.rmtree(d, ignore_errors=True)
-        # Control: a genuine M1 recurrence note DOES flag it.
-        d = tempfile.mkdtemp(prefix="ratchet-lesson-")
-        try:
-            text = ("# Active lessons\n\n## MUST-FIX --- ways it broke\n\n"
-                    "### some-lesson\nBody.\n`assert: TestX`\n"
-                    "recurred-in: M1 the very same milestone\n")
-            ctx = self._ctx(cd, d, text, run_active="M1")
-            ctx.metrics = lambda: {"run": "M1"}
-            names = cd.lessons_recurred_this_run(ctx)
-            self.assertIn(
-                "some-lesson", names,
-                "a real M1 recurrence note stopped flagging M1 -- the boundary "
-                "match is too strict")
-        finally:
-            shutil.rmtree(d, ignore_errors=True)
-
-
-class TestLineCapCountsLikeHeadN(unittest.TestCase):
-    """check_narrative's line caps and session-start's `head -n cap` injection
-    must agree on what "cap lines" means. `text.split(chr(10))` overcounts a
-    newline-terminated file by one, so a file at EXACTLY the cap failed the gate
-    while head -n injected it whole."""
-
-    def _cn(self):
-        src = read(HOOKS / "check_narrative.py")
-        ns = {"__name__": "ratchet_check_narrative",
-              "__file__": str(HOOKS / "check_narrative.py")}
-        exec(compile(src, str(HOOKS / "check_narrative.py"), "exec"), ns)
-        return ns["line_count"]
-
-    def test_a_trailing_newline_is_not_a_phantom_line(self):
-        lc = self._cn()
-        cases = {"": 0, "a\n": 1, "a\nb\n": 2, "a\nb": 2, "a\nb\nc\n": 3}
-        for text, expected in cases.items():
-            self.assertEqual(lc(text), expected, repr(text))
-        at_cap = "".join("line%d\n" % i for i in range(100))
-        self.assertEqual(lc(at_cap), 100,
-                         "a 100-line file counted as %d; at cap 100 it would be "
-                         "rejected though head -n 100 injects it whole" % lc(at_cap))
-
-
-class TestWinRowEvidenceIsNotVacuous(unittest.TestCase):
-    """check 3 accepted a WIN row's evidence on EXISTENCE alone, so a 0-byte
-    file or a gitignored/uncommitted one -- both producible with `touch` --
-    greened the ship criterion. Evidence must be a non-empty, git-tracked file
-    (it is judged at HEAD). Driven through the real CLI against build_good()."""
-
-    def setUp(self):
-        self.cd = TestLessonParserToleratesWriterDrift._cd()
-        self.script = str(HOOKS / "check_done.py")
-        self.evrel = "docs/evidence/M1/win-01.txt"
-
-    def _fixture(self):
-        d = tempfile.mkdtemp(prefix="ratchet-winrow-")
-        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
-        self.cd.build_good(d)
-        return d
-
-    def _win_rows(self, d):
-        r = subprocess.run(
-            [sys.executable, self.script, "--repo-root", d, "--tier", "ship",
-             "--check", "win-rows"], capture_output=True, text=True, timeout=120)
-        line = [l for l in r.stdout.splitlines() if "win-rows" in l]
-        return r.returncode, (line[0] if line else r.stdout)
-
-    def test_the_good_fixture_passes(self):
-        rc, line = self._win_rows(self._fixture())
-        self.assertEqual(rc, 0, "build_good failed check 3:\n%s" % line)
-
-    def test_empty_evidence_is_refused(self):
-        d = self._fixture()
-        with open(os.path.join(d, self.evrel), "w", encoding="utf-8") as f:
-            f.truncate(0)
-        rc, line = self._win_rows(d)
-        self.assertEqual(rc, 1, "a 0-byte evidence file passed check 3:\n%s" % line)
-        self.assertIn("empty", line)
-
-    def test_untracked_evidence_is_refused(self):
-        d = self._fixture()
-        with open(os.path.join(d, self.evrel), "w", encoding="utf-8") as f:
-            f.write("real output\n")
-        subprocess.run(["git", "rm", "--cached", "-q", "--", self.evrel],
-                       cwd=d, capture_output=True, text=True, timeout=60)
-        rc, line = self._win_rows(d)
-        self.assertEqual(rc, 1, "an untracked evidence file passed check 3:\n%s" % line)
-        self.assertIn("not tracked", line)
-
-
-class TestRetroAndConsolidationCadence(unittest.TestCase):
-    """Checks 18 and 19 are the learning loop's own gate. Both were satisfiable
-    while their contract was violated:
-
-      * check 18 keyed retros by MILESTONE, so on a re-attempted (nogo/halted)
-        milestone last run's retro passed the gate while this run filed none;
-      * check 19 fired only when the DOCUMENT count hit a multiple of 5 and only
-        inspected the last window, so a boundary run that ended off-gate made the
-        missed consolidation invisible forever, and a same-run supersession doc
-        (a legal second NNN) drifted the count.
-
-    Driven through the real CLI against build_good() fixtures.
-    """
-
-    def setUp(self):
-        self.cd = TestLessonParserToleratesWriterDrift._cd()
-        self.script = str(HOOKS / "check_done.py")
-
-    def _fixture(self):
-        d = tempfile.mkdtemp(prefix="ratchet-cadence-")
-        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
-        self.cd.build_good(d)
-        return d
-
-    def _check(self, d, which):
-        r = subprocess.run(
-            [sys.executable, self.script, "--repo-root", d, "--tier", "ship",
-             "--check", which],
-            capture_output=True, text=True, timeout=90)
-        line = [l for l in r.stdout.splitlines() if which in l]
-        return r.returncode, (line[0] if line else r.stdout)
-
-    def _mkrun(self, d, nnn, outcome="shipped", ms="M1"):
-        runs = os.path.join(d, ".agent-development", "runs")
-        os.makedirs(runs, exist_ok=True)
-        with open(os.path.join(runs, "%03d-%s-%s.md" % (nnn, ms, outcome)),
-                  "w", encoding="utf-8") as f:
-            f.write("# retro %d\n" % nnn)
-
-    def test_a_previous_runs_retro_does_not_satisfy_a_reattempt(self):
-        d = self._fixture()
-        runs = os.path.join(d, ".agent-development", "runs")
-        os.rename(os.path.join(runs, "001-M1-shipped.md"),
-                  os.path.join(runs, "001-M1-nogo.md"))
-        idx = os.path.join(d, ".agent-development", "INDEX.md")
-        with open(idx, encoding="utf-8") as f:
-            t = f.read().replace("`shipped`", "`nogo`")
-        with open(idx, "w", encoding="utf-8") as f:
-            f.write(t)
-        stale = os.path.join(runs, "001-M1-nogo.md")
-        os.utime(stale, (time.time() - 3600, time.time() - 3600))
-        rc, line = self._check(d, "retro-filed")
-        self.assertEqual(rc, 1, "a stale retro from a previous attempt passed "
-                                "check 18:\n%s" % line)
-        self.assertIn("PREVIOUS run", line)
-        # A retro touched during THIS run satisfies it.
-        os.utime(stale, None)
-        rc, line = self._check(d, "retro-filed")
-        self.assertEqual(rc, 0, "this run's own retro was rejected:\n%s" % line)
-
-    def test_a_missed_consolidation_window_blocks_a_later_ship(self):
-        d = self._fixture()
-        for i in range(2, 7):            # runs 001..006, none consolidated
-            self._mkrun(d, i)
-        rc, line = self._check(d, "consolidation-cadence")
-        self.assertEqual(rc, 1, "6 runs with no consolidation passed check 19 "
-                                "because 6 %% 5 != 0:\n%s" % line)
-        self.assertIn("001-005", line)
-
-    def test_only_the_last_window_is_not_the_whole_check(self):
-        d = self._fixture()
-        for i in range(2, 11):           # runs 001..010
-            self._mkrun(d, i)
-        cons = os.path.join(d, ".agent-development", "consolidated")
-        os.makedirs(cons, exist_ok=True)
-        open(os.path.join(cons, "006-010.md"), "w", encoding="utf-8").close()
-        rc, line = self._check(d, "consolidation-cadence")
-        self.assertEqual(rc, 1, "the 001-005 window was forgiven once 006-010 "
-                                "existed:\n%s" % line)
-        self.assertIn("001-005", line)
-        open(os.path.join(cons, "001-005.md"), "w", encoding="utf-8").close()
-        rc, line = self._check(d, "consolidation-cadence")
-        self.assertEqual(rc, 0, "both windows present but check still failed:\n%s"
-                         % line)
-
-    def test_a_same_run_supersession_doc_does_not_inflate_the_run_count(self):
-        d = self._fixture()
-        self._mkrun(d, 2)
-        self._mkrun(d, 3)
-        self._mkrun(d, 4, outcome="halted")
-        self._mkrun(d, 4, outcome="superseded")   # same run, second NNN doc
-        rc, line = self._check(d, "consolidation-cadence")
-        self.assertEqual(rc, 0, "5 DOCS across 4 distinct runs wrongly demanded "
-                                "a consolidation:\n%s" % line)
+# TestLessonParserToleratesWriterDrift, TestLineCapCountsLikeHeadN,
+# TestWinRowEvidenceIsNotVacuous, and TestRetroAndConsolidationCadence were
+# removed 2026-08-23: they drove check_done.py's lessons/win-rows/retro-filed/
+# consolidation-cadence checks (14, 3, 18, 19), all cut when the checklist was
+# trimmed to its two load-bearing checks (decisions doc). TestLineCapCountsLikeHeadN
+# exercised check_narrative.py's line_count, removed the same day.
 
 
 # --------------------------------------------------------------------------
@@ -4423,9 +3968,9 @@ def build_suite(smoke_only=False, pattern=None, quick_only=False):
 # The dispatch attribution store  (audit F1)
 # =================================================================================================
 class TestVersionIsConsistentEverywhere(unittest.TestCase):
-    """One version, four independently hardcoded copies, previously no check.
+    """One version, three independently hardcoded copies, previously no check.
 
-    VERSION, install.sh, install.ps1 and ratchet.config.sh each carry the number
+    VERSION, install.sh and ratchet.config.sh each carry the number
     separately. Bumping only VERSION was demonstrated to produce an install that
     reports THREE different versions to three different readers -- and
     session-start.sh injects RT_VERSION into the agent's own context, so the
@@ -4435,6 +3980,9 @@ class TestVersionIsConsistentEverywhere(unittest.TestCase):
     This test is the reason that cannot happen again. It fails on ANY divergence,
     in either direction, so a partial bump is caught in the same commit that
     makes it.
+
+    (install.ps1 carried a fourth copy until the PowerShell installer was
+    removed -- PowerShell -> bash/WSL only, 2026-08-23 decisions.)
     """
 
     NEEDS_REPO = False
@@ -4443,7 +3991,6 @@ class TestVersionIsConsistentEverywhere(unittest.TestCase):
     SITES = [
         ("VERSION", r"^\s*(\d+\.\d+\.\d+)\s*$"),
         ("install.sh", r'^RT_INSTALLER_VERSION="(\d+\.\d+\.\d+)"'),
-        ("install.ps1", r'^\$RtInstallerVersion\s*=\s*"(\d+\.\d+\.\d+)"'),
         ("harness/.claude/hooks/ratchet.config.sh",
          r'^RT_VERSION="\$\{RT_VERSION:-(\d+\.\d+\.\d+)\}"'),
     ]

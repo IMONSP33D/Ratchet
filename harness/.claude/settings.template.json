@@ -98,8 +98,6 @@
       "Bash(.claude/hooks/pipeline-event.sh:*)",
       "Bash(python .claude/hooks/check_done.py:*)",
       "Bash(python3 .claude/hooks/check_done.py:*)",
-      "Bash(python .claude/hooks/check_narrative.py:*)",
-      "Bash(python3 .claude/hooks/check_narrative.py:*)",
       "Bash(python .claude/hooks/proof_map.py:*)",
       "Bash(python3 .claude/hooks/proof_map.py:*)",
       "Bash(python .claude/hooks/run_metrics.py:*)",

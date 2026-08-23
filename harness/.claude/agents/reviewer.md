@@ -109,7 +109,7 @@ Each finding carries:
 
 - a **name** — kebab-case, 2–5 words, stating the problem: `retry-loop-has-no-ceiling`, not `issue-3`.
   Names are permanent, never reused, unique across the findings ledger, `ACTIVE-LESSONS.md`,
-  `PENDING-HUMAN-ACTIONS.md` and `DECISIONS.md`, and validated by `check_narrative.py --validate-name`.
+  `PENDING-HUMAN-ACTIONS.md` and `DECISIONS.md`, and validated by `rt_name_valid` (`hooklib.sh`).
   Anything matching `^(fix|update|change|misc|various|general|temp|new|old)-` is rejected mechanically.
 - a **severity** — CRITICAL / HIGH / MEDIUM / LOW;
 - **evidence** — `file:line` at the review SHA, or a verbatim quote from the report you are auditing;
@@ -139,9 +139,11 @@ raw output to `docs/evidence/M<n>/probes/` and cite the path. Re-narrating a tra
 tokens to produce something strictly *less* trustworthy than the transcript — no model chose what went
 into the raw output, which is exactly what makes it evidence.
 
-Neither cap removes anything a later reader needs. If you find that one does, **say so as a finding
-against `check_narrative.py`** — a cut that loses evidence is the `shorter-artifact-drops-evidence`
-false economy, and this design has paid for it once already.
+Neither cap removes anything a later reader needs. If you find that one does, **say so as a finding**
+— a cut that loses evidence is the `shorter-artifact-drops-evidence` false economy, and this design
+has paid for it once already. (Through 2026-08-23 these caps were mechanically enforced by
+`check_narrative.py`; it was cut along with the 17 non-load-bearing `check_done.py` checks, so this
+is presently self-policed.)
 
 ## Close with a MISSION VERDICT
 
@@ -162,7 +164,7 @@ severity-as-filed — that everything downstream trusts.
 | trusting `verify-last.json` without checking `head_sha` | a green from a different tree |
 | findings filed only in the ledger, not in the raw file | the reconciliation check passes vacuously |
 | prescribing the fix | the board becomes the implementer and nobody independent reviews the remedy |
-| a generic finding name | rejected by `check_narrative.py`; the run stalls on a rename |
+| a generic finding name | rejected by `rt_name_valid`; the run stalls on a rename |
 
 ## Who checks you
 

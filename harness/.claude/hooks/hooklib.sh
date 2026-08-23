@@ -944,19 +944,20 @@ rt_cmd_tokens() {
 # 10. naming doctrine  (CONTRACT SS6)
 # =================================================================================================
 # rt_name_valid <name> - exit 0 valid, 1 invalid (reason on stderr).
-# Rules, identical to check_narrative.py --validate-name:
+# The one implementation of the naming rules as of 2026-08-23 (previously mirrored in a second,
+# independent Python implementation, check_narrative.py --validate-name; that script was cut, and
+# with it the shared-fixture parity test that kept the two in agreement):
 #   * ^[a-z][a-z0-9]*(-[a-z0-9]+){1,4}$   (kebab-case, 2-5 words)
 #   * not on the too-generic hard list
 #   * not matching ^(fix|update|change|misc|various|general|temp|new|old)-
 #   * multi-step form "<valid-name>-<n>" is accepted even when the counter pushes it past 5 words
 # A name must state the problem: gate-blames-wrong-actor, not issue-3.
 #
-# ONE INTERPRETATION CALL, and check_narrative.py --validate-name must make the same one:
-# a name whose LAST segment is purely numeric is read as the multi-step form, so its base must
-# itself be a valid name. That rejects `issue-3` and `phase-2` (base is one word) while accepting
-# `harness-adjustment-1`. Read the other way - "issue-3 satisfies the 2-5 word regex, ship it" -
-# the doctrine's own counter-example passes its own validator, which cannot be the intent.
-# Names whose last word merely contains digits (`sha256-mismatch`) are unaffected.
+# ONE INTERPRETATION CALL: a name whose LAST segment is purely numeric is read as the multi-step
+# form, so its base must itself be a valid name. That rejects `issue-3` and `phase-2` (base is one
+# word) while accepting `harness-adjustment-1`. Read the other way - "issue-3 satisfies the 2-5 word
+# regex, ship it" - the doctrine's own counter-example passes its own validator, which cannot be the
+# intent. Names whose last word merely contains digits (`sha256-mismatch`) are unaffected.
 RT_GENERIC_NAMES="fix-issue
 fix-bug
 misc-problem

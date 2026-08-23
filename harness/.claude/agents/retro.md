@@ -243,8 +243,8 @@ Three findings this table exists to produce, in descending severity:
 
 ## Format budget — this document has a size, and it is checked
 
-**Target ~180 lines, hard cap `CAP_RETRO_LINES`, enforced by `check_narrative.py` through
-`check_done.py`.**
+**Target ~180 lines, hard cap `CAP_RETRO_LINES`.** (Through 2026-08-23 mechanically enforced by
+`check_narrative.py` through `check_done.py`; both were cut, so this is presently self-policed.)
 
 What the budget cuts is **restatement**: §1/§3/§4 narrating at essay length what §6/§7 then state again
 from the same evidence. What it must never cut, and what no consolidation may propose cutting to make the
