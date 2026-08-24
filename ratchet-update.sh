@@ -213,10 +213,27 @@ INSTALL_ARGS=(--target "$TARGET" --force --quiet)
 
 if [ "$ADOPT_BASELINE" = "1" ]; then
   head1 "Adopting the current tree as the checksum baseline"
-  say "  Delegates to install.sh itself (the sole writer of .ratchet-manifest)."
-  [ "$DRY_RUN" = "1" ] && { ok "DRY: would re-run install.sh to record the baseline"; exit 0; }
-  bash "$BUNDLE/install.sh" "${INSTALL_ARGS[@]}" --no-verify \
-    && ok "baseline recorded" || die "install.sh failed while adopting the baseline"
+  say "  Records what is on disk RIGHT NOW as pristine, writing NOTHING else."
+  say "  Run this only when you know the harness has not been hand-edited since"
+  say "  install: anything already modified becomes invisible to every future"
+  say "  update, which is the one way this file can hurt you."
+  [ "$DRY_RUN" = "1" ] && { ok "DRY: would write .claude/.ratchet-manifest and .claude/.ratchet-version"; exit 0; }
+  tmp="$MANIFEST.new"
+  {
+    printf '# Ratchet harness manifest -- adopted from the on-disk tree by ratchet-update.sh %s\n' "$RTU_VERSION"
+    printf '# Format: "<installed-sha256>  <template-canon-sha256>  <repo-relative-path>"\n'
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      [ -f "$TARGET/$rel" ] || continue
+      src="$HARNESS_SRC/$rel"
+      [ "$rel" = "CLAUDE.ratchet.md" ] && src="$HARNESS_SRC/.claude/doctrine/CLAUDE.md"
+      inst="$(rtu_sha "$TARGET/$rel")"; [ -n "$inst" ] || continue
+      tmpl="$(rtu_tmpl_sha "$src")";   [ -n "$tmpl" ] || tmpl="$inst"
+      printf '%s  %s  %s\n' "$inst" "$tmpl" "$rel"
+    done < <({ rtu_harness_paths "$HARNESS_SRC"; [ -f "$TARGET/CLAUDE.ratchet.md" ] && echo "CLAUDE.ratchet.md"; } | sort -u)
+  } > "$tmp" && mv -f "$tmp" "$MANIFEST" || die "could not write $MANIFEST"
+  printf '%s\n' "$INSTALLED_VERSION" > "$VERSION_FILE" 2>/dev/null || true
+  ok "baseline recorded ($(grep -cv '^#' "$MANIFEST") files) against bundle $BUNDLE_VERSION templates"
   exit 0
 fi
 
@@ -255,7 +272,11 @@ while IFS= read -r rel; do
   else
     [ "$changed" = "0" ] && KEEP="$KEEP$rel"$'\n' || CONFLICT="$CONFLICT$rel"$'\n'
   fi
-done < <(rtu_harness_paths "$HARNESS_SRC")
+done < <({ rtu_harness_paths "$HARNESS_SRC"
+           # CLAUDE.ratchet.md never exists in a bundle (its source is
+           # doctrine/CLAUDE.md); it exists only in targets whose project had
+           # its own root CLAUDE.md — include it when the TARGET has it.
+           [ -f "$TARGET/CLAUDE.ratchet.md" ] && echo "CLAUDE.ratchet.md"; } | sort -u)
 
 ORPHAN=""
 if [ -f "$MANIFEST" ]; then
@@ -280,10 +301,20 @@ if [ -n "$CONFLICT" ]; then
   head1 "${C_Y}CONFLICT${C_0} (you edited it AND upstream changed it — the only interesting case)"
   printf '%s' "$CONFLICT" | sed 's/^/  /'
   say "  Each will get a sibling <path>.ratchet-merge holding the new version;"
-  say "  your file is left untouched. Merge by hand."
+  say "  your file is left untouched. Merge by hand, then delete the .ratchet-merge."
 fi
 [ -n "$UNVERIFIED" ] && { head1 "UNVERIFIED (no baseline row — cannot prove local edits, treated as CONFLICT)"; printf '%s' "$UNVERIFIED" | sed 's/^/  /'; CONFLICT="$CONFLICT$UNVERIFIED"; }
 [ -n "$ORPHAN" ]     && { head1 "ORPHAN (baseline knows it; the new bundle no longer ships it — left in place)"; printf '%s' "$ORPHAN" | sed 's/^/  /'; }
+
+# Unresolved conflicts from PREVIOUS updates live on disk as *.ratchet-merge
+# files. They are listed on every run until resolved — the lingering file is
+# the outstanding-work marker, not any manifest state.
+STALE_MERGES="$(find "$TARGET/.claude" "$TARGET/CLAUDE.ratchet.md.ratchet-merge" -name '*.ratchet-merge' -type f 2>/dev/null | sed "s#^$TARGET/##")"
+if [ -n "$STALE_MERGES" ]; then
+  head1 "${C_Y}UNRESOLVED${C_0} (*.ratchet-merge files from a previous update still on disk)"
+  printf '%s\n' "$STALE_MERGES" | sed 's/^/  /'
+  say "  Diff each against its sibling, merge by hand, delete the .ratchet-merge."
+fi
 say ""
 say "  MERGED  .claude/settings.json — install.sh unions permissions and re-wires hooks."
 say "  USER    everything else, including every path not listed above."
@@ -295,8 +326,21 @@ if [ "$MODE" = "check" ]; then
 fi
 
 # ============================================================================
-# APPLY — install.sh writes; this script snapshots KEEP/CONFLICT first and
-# restores them after, since install.sh's copy has no concept of either.
+# APPLY — install.sh writes (files AND the fresh manifest); this script
+# snapshots KEEP/CONFLICT files first and restores them after.
+#
+# THE MANIFEST IS DELIBERATELY LEFT AS INSTALL.SH WROTE IT — no fixup pass.
+# For a restored (KEEP or CONFLICT) path, disk holds the user's bytes while
+# the manifest row holds the new version's hashes, so the file keeps reading
+# as edited-relative-to-template on every future run:
+#   - KEEP stays KEEP until upstream changes the file again — then CONFLICT.
+#   - An unresolved CONFLICT reads as KEEP against the same bundle (the file
+#     really is just "user-edited" now); the lingering *.ratchet-merge on
+#     disk is what marks it unresolved, and the report lists those each run.
+# Patching the manifest to the restored bytes instead would declare the
+# user's fork "what we installed", and the NEXT upstream change to that file
+# would classify as a clean UPDATE and silently clobber it — the exact
+# failure this whole design exists to prevent.
 # ============================================================================
 if [ "$DRY_RUN" != "1" ] && [ "$ASSUME_YES" != "1" ]; then
   if [ ! -t 0 ]; then die "no terminal to confirm on and --yes was not given."; fi
@@ -311,7 +355,6 @@ while IFS= read -r rel; do
   mkdir -p "$SNAP/$(dirname "$rel")" 2>/dev/null
   cp -f "$TARGET/$rel" "$SNAP/$rel" 2>/dev/null
 done <<<"$KEEP_CONFLICT"
-[ -f "$MANIFEST" ] && cp -f "$MANIFEST" "$MANIFEST.pre-update" 2>/dev/null
 
 [ "$RUN_VERIFY" != "1" ] && INSTALL_ARGS+=(--no-verify)
 [ "$DRY_RUN" = "1" ]     && INSTALL_ARGS+=(--dry-run)
@@ -323,59 +366,9 @@ if [ "$DRY_RUN" != "1" ]; then
     [ -n "$rel" ] || continue
     if printf '%s' "$CONFLICT" | grep -qx "$rel"; then
       mv -f "$TARGET/$rel" "$TARGET/$rel.ratchet-merge" 2>/dev/null
-      cp -f "$SNAP/$rel" "$TARGET/$rel" 2>/dev/null
-    else
-      cp -f "$SNAP/$rel" "$TARGET/$rel" 2>/dev/null
     fi
+    cp -f "$SNAP/$rel" "$TARGET/$rel" 2>/dev/null
   done <<<"$KEEP_CONFLICT"
-
-  # Fix up the manifest install.sh just wrote: a KEEP path's installed-hash
-  # must reflect the restored (user's) bytes, not what install.sh wrote before
-  # we restored over it; a CONFLICT path's whole row reverts to pre-update, so
-  # an unresolved conflict keeps showing up on the next run instead of
-  # silently clearing.
-  if [ -n "$PY" ] && [ -f "$MANIFEST" ] && [ -n "$KEEP_CONFLICT" ]; then
-    "$PY" - "$MANIFEST" "${MANIFEST}.pre-update" "$TARGET" <<PYEOF 2>/dev/null
-import sys
-cur_path, old_path, target = sys.argv[1], sys.argv[2], sys.argv[3]
-keep = """$KEEP""".splitlines()
-conflict = """$CONFLICT""".splitlines()
-
-def rows(p):
-    out = {}
-    try:
-        for ln in open(p, encoding="utf-8"):
-            parts = ln.rstrip("\n").split("  ")
-            if len(parts) == 3:
-                out[parts[2]] = ln.rstrip("\n")
-    except OSError:
-        pass
-    return out
-
-cur = rows(cur_path)
-old = rows(old_path) if old_path else {}
-for rel in conflict:
-    if rel in old:
-        cur[rel] = old[rel]
-for rel in keep:
-    if rel not in cur:
-        continue
-    h1, h2, path = cur[rel].split("  ")
-    try:
-        import hashlib
-        newh = hashlib.sha256(open(target + "/" + rel, "rb").read()).hexdigest()
-        cur[rel] = "  ".join([newh, h2, path])
-    except OSError:
-        pass
-
-header = [ln for ln in open(cur_path, encoding="utf-8") if ln.startswith("#")]
-open(cur_path, "w", encoding="utf-8").writelines(header + [cur[p] + "\n" for p in cur])
-PYEOF
-  elif [ -n "$KEEP_CONFLICT" ]; then
-    warn "no python3 — the manifest for $(n "$KEEP_CONFLICT") KEEP/CONFLICT path(s) may be"
-    say "        stale until the next update. Files on disk are correct either way."
-  fi
-  rm -f "${MANIFEST}.pre-update" 2>/dev/null
 fi
 rm -rf "$SNAP" 2>/dev/null
 

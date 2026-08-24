@@ -68,9 +68,10 @@ append-only by design and exists to be appended to. Nothing else in the USER par
 
 ### 2.2 A real three-way merge, not a diff against your disk
 
-At install and at every update, `install.sh` (the only writer of it — CONTRACT §2.1) records
-`.claude/.ratchet-manifest`: two checksums per harness file, as written — one of the file as
-installed, one of the source template with every `{{MARKER}}` reduced to a placeholder. That second
+At install and at every update, `install.sh` records `.claude/.ratchet-manifest` (with
+`ratchet-update.sh --adopt-baseline` as the one other sanctioned writer, for pre-manifest installs):
+two checksums per harness file, as written — one of the file as installed, one of the source
+template with every `{{MARKER}}` reduced to a placeholder. That second
 hash is what makes a *three*-way compare possible: old-template vs new-template vs on-disk, not just
 "does this file match what we last wrote".
 
@@ -94,8 +95,15 @@ back to, and `git checkout .` remains a complete undo for every UPDATE.
 
 **No manifest at all** (an install that predates the manifest, or a checksum tool that was absent at
 install time) → every harness file is UNVERIFIED, i.e. treated as a conflict, until you run
-`ratchet-update.sh --adopt-baseline` once — it re-runs `install.sh` on the current tree to record a
-fresh baseline. Do this only when you know the tree has not been hand-edited since install.
+`ratchet-update.sh --adopt-baseline` once — it records the current on-disk tree as the baseline,
+writing nothing else. Do this only when you know the tree has not been hand-edited since install:
+anything already modified becomes invisible to every future update.
+
+**How a conflict clears.** The unresolved-work marker is the `.ratchet-merge` file itself, not any
+manifest state: the report lists every `*.ratchet-merge` still on disk, on every run, until you
+merge it into the real file and delete it. (Against the same bundle version, a conflicted file's
+*verdict* relaxes to KEEP — it really is just "user-edited" at that point — but the listing keeps
+naming it as unresolved as long as the `.ratchet-merge` exists.)
 
 ### 2.3 What makes it refuse
 
@@ -258,8 +266,8 @@ Run this before starting any milestone on a freshly-updated harness.
       ```
 - [ ] **Resolve every `<file>.ratchet-merge`.** It sits beside a file the updater left untouched
       because you had edited it AND upstream changed it too (§2.2, CONFLICT). Diff the two, merge by
-      hand into the real file, then delete the `.ratchet-merge` — until you do, the next update reports
-      the same conflict again, which is deliberate, not a bug.
+      hand into the real file, then delete the `.ratchet-merge` — until you do, every future
+      update's report lists it under UNRESOLVED, which is deliberate, not a bug.
 - [ ] **Close the rows the update filed** in `.agent-development/PENDING-HUMAN-ACTIONS.md`. Set the
       Status column to DONE and say what you did; rows are never deleted, because a closed row is
       evidence.
