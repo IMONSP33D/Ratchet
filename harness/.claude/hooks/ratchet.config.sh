@@ -29,9 +29,24 @@ RT_VERSION="${RT_VERSION:-1.2.2}"
 _rt_cfg_source="${BASH_SOURCE[0]:-$0}"
 
 _rt_resolve_root() {
-  local d p
-  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "${CLAUDE_PROJECT_DIR}" ]; then
-    ( cd "${CLAUDE_PROJECT_DIR}" 2>/dev/null && pwd ) && return 0
+  local d p c
+  # CLAUDE_PROJECT_DIR arrives in the CALLER's dialect, which is not always this shell's: Claude
+  # Code running on Windows hands a WSL-hosted hook "C:\repo", where -d is false and this used to
+  # fall through to the walk-up silently. hooklib.sh's rt_canon_abs is the full six-dialect
+  # reduction, but it is not sourced yet here, so this is the same idea in a few lines: try the
+  # value as given, then the obvious re-spellings, and take the first that is really a directory.
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    for c in "${CLAUDE_PROJECT_DIR}" "${CLAUDE_PROJECT_DIR//\\//}"; do
+      [ -n "$c" ] && [ -d "$c" ] && { ( cd "$c" 2>/dev/null && pwd ) && return 0; }
+    done
+    c="${CLAUDE_PROJECT_DIR//\\//}"
+    case "$c" in
+      [A-Za-z]:/*)
+        d=${c%%:*}; d=${d,,}; p=${c#*:}
+        for c in "/mnt/${d}${p}" "/${d}${p}" "/cygdrive/${d}${p}"; do
+          [ -d "$c" ] && { ( cd "$c" 2>/dev/null && pwd ) && return 0; }
+        done ;;
+    esac
   fi
   d=$( cd "$(dirname "${_rt_cfg_source}")" 2>/dev/null && pwd )
   while [ -n "$d" ]; do

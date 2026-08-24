@@ -143,8 +143,23 @@ rt_pick_py() {
       fi
     done < "$cache"
   fi
+  local _rtp
   for cand in ${RATCHET_PYTHON:+"$RATCHET_PYTHON"} python3 python "py -3"; do
     command -v "${cand%% *}" >/dev/null 2>&1 || continue
+    # WSL appends the Windows PATH by default, so `python3`, `python` and `py -3` can all resolve
+    # to a WINDOWS interpreter from inside a Linux shell. It runs, it prints 3, and then it reports
+    # Windows paths and Windows temp dirs back into a Linux pipeline -- the dialect bug this
+    # library exists to prevent, arriving from the one direction no path function can see, because
+    # by then the strings are already wrong. Refuse an interpreter that lives on a Windows volume.
+    # RATCHET_PYTHON is exempt: an explicit choice by a human outranks this heuristic.
+    if [ "$cand" != "${RATCHET_PYTHON:-}" ] && [ "$(rt_platform)" = "wsl" ]; then
+      rt_mount_root >/dev/null
+      _rtp=$(command -v "${cand%% *}" 2>/dev/null)
+      case "$_rtp" in
+        *.exe|*.EXE) continue ;;
+        "${RT_MOUNTROOT:-/mnt}"/*) continue ;;
+      esac
+    fi
     # shellcheck disable=SC2086
     out=$($cand -c "import sys;print(sys.version_info[0])" 2>/dev/null)
     out=${out%$'\r'}
@@ -344,14 +359,146 @@ rt_strip_msg() {
 # 4. paths
 # =================================================================================================
 
-# C:/x -> /c/x  (Git-Bash reports both forms depending on who produced the path)
-_rt_drive() {
-  local p="${1-}" d
-  case "$p" in
-    [A-Za-z]:/*) d=${p%%:*}; printf '/%s%s' "$(printf '%s' "$d" | tr 'A-Z' 'a-z')" "${p#*:}" ;;
-    *) printf '%s' "$p" ;;
-  esac
+# -------------------------------------------------------------------------------------------------
+# THE PATH DIALECT PROBLEM, AND THE ONE PLACE IT IS SOLVED
+#
+# One directory has up to six legal spellings, and EVERY gate decision in this harness is a prefix
+# comparison between two of them:
+#
+#   C:\repo                       Windows native   (Claude Code on Windows hands hooks this form)
+#   C:/repo                       Windows, forward slashes (git, jq and node all emit this)
+#   /c/repo                       MSYS / Git-Bash
+#   /mnt/c/repo                   WSL, repo on the Windows filesystem
+#   /home/u/repo                  Linux native, and WSL with the repo inside the distro
+#   //wsl.localhost/Ubuntu/repo   Windows reaching INTO a distro (also the older //wsl$/... form)
+#
+# Whichever two dialects meet, they must reduce to ONE form before being compared, or the prefix
+# strip silently fails, the path stays ABSOLUTE, and every downstream comparison misfires. Both
+# directions of that failure are bad and one of them is invisible:
+#
+#   fail CLOSED (visible)  - .pipeline/ stops matching its own exemption and the agent is refused
+#                            the scratch directory the block message just told it to write.
+#   fail OPEN  (invisible) - .context/SPEC.md stops matching the governing corpus, and a Tier 2b
+#                            wall is simply not there. Nothing reports this.
+#
+# rt_canon_abs is that one reduction. It maps every spelling above to the spelling that WORKS IN
+# THIS SHELL, so the result is comparable AND usable -- a canonical form you cannot stat is a trap
+# for the next reader. Pure string work, no forks on the hot path: a guard normalises dozens of
+# paths per invocation and on Git-Bash a fork per path is the difference between 40ms and a second.
+#
+# RT_PLATFORM, RT_MOUNTROOT and RATCHET_MOUNT_ROOT may all be set in the environment to override
+# detection on a host that lies about itself. They are the escape hatch AND the test seam.
+# -------------------------------------------------------------------------------------------------
+
+# rt_platform -> linux | wsl | msys      (cached in RT_PLATFORM; fork-free)
+rt_platform() {
+  if [ -z "${RT_PLATFORM:-}" ]; then
+    RT_PLATFORM=linux
+    case "${OSTYPE:-}${MSYSTEM:-}" in *[Mm]sys*|*[Cc]ygwin*|*[Mm]ingw*) RT_PLATFORM=msys ;; esac
+    if [ "$RT_PLATFORM" = "linux" ]; then
+      if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ]; then
+        RT_PLATFORM=wsl
+      elif [ -r /proc/sys/kernel/osrelease ]; then
+        # Reading the file beats `uname -r`: same string, no fork.
+        local _osr=""
+        IFS= read -r _osr < /proc/sys/kernel/osrelease 2>/dev/null || _osr=""
+        case "$_osr" in *[Mm]icrosoft*|*WSL*|*wsl*) RT_PLATFORM=wsl ;; esac
+      fi
+    fi
+  fi
+  printf '%s' "$RT_PLATFORM"
 }
+
+# rt_mount_root -> the prefix WSL mounts Windows drives under, no trailing slash. "/mnt" by
+# default; "" when /etc/wsl.conf sets [automount] root = / . This is per-machine configurable, so
+# hardcoding /mnt is precisely the assumption that makes a harness work on its author's box and
+# nowhere else.
+rt_mount_root() {
+  if [ -z "${RT_MOUNTROOT+x}" ]; then
+    RT_MOUNTROOT="/mnt"
+    if [ -r /etc/wsl.conf ]; then
+      local _r
+      _r=$(sed -n 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*\(.*\)$/\1/p' /etc/wsl.conf 2>/dev/null | head -n 1)
+      _r=${_r%$'\r'}
+      _r=${_r%\"}; _r=${_r#\"}; _r=${_r%\'}; _r=${_r#\'}
+      _r=${_r%"${_r##*[![:space:]]}"}
+      [ -n "$_r" ] && RT_MOUNTROOT="${_r%/}"
+    fi
+  fi
+  [ -n "${RATCHET_MOUNT_ROOT+x}" ] && RT_MOUNTROOT="${RATCHET_MOUNT_ROOT%/}"
+  printf '%s' "$RT_MOUNTROOT"
+}
+
+# rt_canon_abs_var <path> -> RT_CANON, plus RT_CANON_WIN=1 when the path names a Windows volume
+# (which is a property of the VOLUME, not of the shell -- see rt_repo_rel_var).
+rt_canon_abs_var() {
+  local p="${1-}" d="" rest="" cand
+  p=${p//$'\r'/}
+  p=${p//\\//}
+  RT_CANON_WIN=0
+  [ -n "${RT_PLATFORM:-}" ]  || rt_platform   >/dev/null
+  [ -n "${RT_MOUNTROOT+x}" ] || rt_mount_root >/dev/null
+
+  # 1. UNC into a WSL distro. Inside that distro the same file is just /x; outside it, leave the
+  #    path alone -- it is a network path this shell genuinely cannot shorten.
+  case "$p" in
+    //wsl.localhost/*|//wsl\$/*|/wsl.localhost/*|/wsl\$/*)
+      rest=${p#/}; rest=${rest#/}; rest=${rest#*/}
+      d=${rest%%/*}; rest=${rest#"$d"}
+      if [ "$RT_PLATFORM" = "wsl" ] && \
+         { [ -z "${WSL_DISTRO_NAME:-}" ] || [ "$d" = "${WSL_DISTRO_NAME}" ]; }; then
+        p="${rest:-/}"
+      fi
+      d=""; rest="" ;;
+  esac
+  while [ "$p" != "${p//\/\//\/}" ]; do p=${p//\/\//\/}; done
+
+  # 2. Find a drive letter in whichever spelling it arrived in.
+  case "$p" in
+    [A-Za-z]:|[A-Za-z]:/*)                        d=${p%%:*}; rest=${p#*:} ;;
+    /cygdrive/[A-Za-z]|/cygdrive/[A-Za-z]/*)      rest=${p#/cygdrive/}; d=${rest%%/*}; rest=${rest#?} ;;
+  esac
+  if [ -z "$d" ] && [ "$RT_PLATFORM" = "wsl" ] && [ -n "${RT_MOUNTROOT:-}" ]; then
+    case "$p" in
+      "$RT_MOUNTROOT"/[A-Za-z]|"$RT_MOUNTROOT"/[A-Za-z]/*)
+        rest=${p#"$RT_MOUNTROOT"/}; d=${rest%%/*}; rest=${rest#?} ;;
+    esac
+  fi
+  if [ -z "$d" ]; then
+    # MSYS spells C:\ as /c/ . Under WSL that spelling is a leak from a Windows-side caller. On
+    # plain Linux /c may be a genuine directory, so this branch never fires there.
+    case "$RT_PLATFORM" in
+      msys|wsl) case "$p" in
+                  /[A-Za-z]|/[A-Za-z]/*) rest=${p#/}; d=${rest%%/*}; rest=${rest#?} ;;
+                esac ;;
+    esac
+  fi
+
+  # 3. Re-spell it the way THIS shell reaches that volume.
+  if [ -n "$d" ]; then
+    d=${d,,}
+    [ -n "$rest" ] || rest="/"
+    RT_CANON_WIN=1
+    if [ "$RT_PLATFORM" = "wsl" ]; then
+      cand="${RT_MOUNTROOT}/${d}${rest}"
+      # Never invent a path: if the drive spelling does not exist but the original does, the
+      # original was a real Linux directory that merely looked like a drive.
+      if [ -e "$cand" ] || [ ! -e "$p" ]; then p="$cand"; else RT_CANON_WIN=0; fi
+    else
+      p="/${d}${rest}"
+    fi
+  fi
+  [ "$RT_PLATFORM" = "msys" ] && RT_CANON_WIN=1
+
+  case "$p" in */) [ "$p" = "/" ] || p=${p%/} ;; esac
+  RT_CANON="$p"
+  return 0
+}
+rt_canon_abs() { rt_canon_abs_var "${1-}"; printf '%s' "$RT_CANON"; }
+RT_CANON=""; RT_CANON_WIN=0
+
+# Back-compat shim: the old two-dialect helper, now a thin wrapper on the full reduction.
+_rt_drive() { rt_canon_abs_var "${1-}"; printf '%s' "$RT_CANON"; }
 
 # rt_repo_rel <path> - normalise to a repo-relative POSIX path.
 # Strips CR, converts backslashes, folds a Windows drive prefix, removes the REPO_ROOT prefix,
@@ -363,20 +510,26 @@ _rt_drive() {
 # paths per invocation - on Git-Bash that is the difference between 40ms and a second.
 rt_repo_rel() { rt_repo_rel_var "${1-}"; printf '%s' "$RT_REL"; }
 rt_repo_rel_var() {
-  local p="${1-}" root="${REPO_ROOT:-$PWD}" acc="" seg lead="" hadf=0
-  p=${p//$'\r'/}
-  p=${p//\\//}
-  root=${root//\\//}
-  # C:/x -> /c/x on both sides, so the two forms Git-Bash emits for the same path compare equal.
-  # Was either side handed to us in Windows drive form, or are we on a Windows
-  # shell at all? Either means the filesystem underneath is case-insensitive.
+  local p root acc="" seg lead="" hadf=0 pwin
+  rt_canon_abs_var "${1-}"; p="$RT_CANON"; pwin="$RT_CANON_WIN"
+  # The canonical root is cached against its raw value: rt_repo_rel_var runs dozens of times per
+  # guard invocation and REPO_ROOT does not move between them.
+  if [ "${RT_ROOT_RAW-__unset__}" != "${REPO_ROOT:-$PWD}" ]; then
+    RT_ROOT_RAW="${REPO_ROOT:-$PWD}"
+    rt_canon_abs_var "$RT_ROOT_RAW"; RT_ROOT_CANON="$RT_CANON"; RT_ROOT_WIN="$RT_CANON_WIN"
+  fi
+  root="$RT_ROOT_CANON"
+  # CASE-INSENSITIVITY IS A PROPERTY OF THE VOLUME, NOT OF THE SHELL.
+  # A repo on an NTFS mount is case-insensitive even when bash is Linux -- WSL with the repo under
+  # /mnt/c, which is the single most common Windows setup there is. Deciding this from $OSTYPE
+  # alone (as this did until 2026-08-24) answered "is the SHELL Windows", said no, and compared
+  # case-sensitively on a case-insensitive filesystem. Every deny list runs through here: secrets,
+  # the governing corpus, the control set. `Guard.sh` would not have matched `guard.sh`, and the
+  # never-escalatable wall would have been one shifted letter wide. Fail-open, and silent.
   RT_WINPATH=0
-  case "$p"    in [A-Za-z]:/*) RT_WINPATH=1 ;; esac
-  case "$root" in [A-Za-z]:/*) RT_WINPATH=1 ;; esac
-  case "${OSTYPE:-}${MSYSTEM:-}" in *[Mm]sys*|*[Cc]ygwin*|*[Mm]ingw*) RT_WINPATH=1 ;; esac
-  case "$p"    in [A-Za-z]:/*) seg=${p%%:*};    p="/${seg,,}${p#*:}" ;; esac
-  case "$root" in [A-Za-z]:/*) seg=${root%%:*}; root="/${seg,,}${root#*:}" ;; esac
-  while [ "$p" != "${p//\/\//\/}" ]; do p=${p//\/\//\/}; done
+  if [ "$pwin" = "1" ] || [ "${RT_ROOT_WIN:-0}" = "1" ] || [ "${RT_PLATFORM:-}" = "msys" ]; then
+    RT_WINPATH=1
+  fi
   case "$p" in
     "$root"/*) p=${p#"$root"/} ;;
     "$root")   p="." ;;

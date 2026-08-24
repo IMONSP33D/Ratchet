@@ -3961,6 +3961,7 @@ QUICK_CLASSES = (
     "TestShipFlowIsTwoFactor",            # nothing reaches the base branch alone
     "TestScopeGuardTier2b",               # human-owned files stay human-owned
     "TestApprovalCannotBeReused",         # single-use, byte-exact, run-bound
+    "TestEveryPathDialectReducesToOne",   # WSL/Git-Bash/Linux all mean one repo
 )
 
 
@@ -4482,6 +4483,147 @@ class TestBashIsResolvedByProbe(unittest.TestCase):
             self.assertIn("ratchet-ok", v.stdout, "chosen bash %r does not work" % chosen)
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+class TestEveryPathDialectReducesToOne(unittest.TestCase):
+    """One directory has six legal spellings; every gate is a prefix compare.
+
+    A repo may live on the Windows filesystem or inside a WSL distro, and the
+    shell driving the hooks may be Linux, WSL or Git-Bash -- INDEPENDENTLY of
+    each other. Claude Code running on Windows hands a WSL-hosted hook
+    "C:\\repo"; Git-Bash calls the same place /c/repo; WSL calls it /mnt/c/repo
+    unless /etc/wsl.conf moved the automount root. Whichever two dialects meet,
+    they must reduce to one form or the prefix strip fails and the path stays
+    absolute -- fail-closed on .pipeline/ (visible) and fail-OPEN on .context/
+    (invisible).
+
+    These run on ANY host: RT_PLATFORM / RT_MOUNTROOT are the documented
+    overrides, so the WSL and MSYS branches are EXECUTED here, not merely
+    trusted to work on a machine nobody in CI has.
+    """
+
+    #: (label, platform, mountroot, distro, root, path, expected)
+    CASES = (
+        # --- WSL, repo on the Windows filesystem (the common Windows setup) ---
+        ("wsl /mnt native",   "wsl", "/mnt", "", "/mnt/c/repo", "/mnt/c/repo/src/app.py", "src/app.py"),
+        ("wsl <- win backsl", "wsl", "/mnt", "", "/mnt/c/repo", "C:\\repo\\src\\app.py",  "src/app.py"),
+        ("wsl <- win fwdsl",  "wsl", "/mnt", "", "/mnt/c/repo", "C:/repo/src/app.py",     "src/app.py"),
+        ("wsl <- msys form",  "wsl", "/mnt", "", "/mnt/c/repo", "/c/repo/src/app.py",     "src/app.py"),
+        ("wsl <- cygdrive",   "wsl", "/mnt", "", "/mnt/c/repo", "/cygdrive/c/repo/src/app.py", "src/app.py"),
+        ("wsl case variant",  "wsl", "/mnt", "", "/mnt/c/repo", "/mnt/c/REPO/src/app.py", "src/app.py"),
+        # --- WSL, repo inside the distro, reached from Windows over UNC ---
+        ("wsl distro native", "wsl", "/mnt", "Ubuntu", "/home/u/repo", "/home/u/repo/src/app.py", "src/app.py"),
+        ("wsl <- //wsl.local","wsl", "/mnt", "Ubuntu", "/home/u/repo",
+         "//wsl.localhost/Ubuntu/home/u/repo/src/app.py", "src/app.py"),
+        ("wsl <- \\\\wsl$",   "wsl", "/mnt", "Ubuntu", "/home/u/repo",
+         "\\\\wsl$\\Ubuntu\\home\\u\\repo\\src\\app.py", "src/app.py"),
+        # --- Git-Bash / MSYS ---
+        ("msys native",       "msys", "/mnt", "", "/c/repo", "/c/repo/src/app.py",    "src/app.py"),
+        ("msys <- backslash", "msys", "/mnt", "", "/c/repo", "C:\\repo\\src\\app.py", "src/app.py"),
+        ("msys <- fwdslash",  "msys", "/mnt", "", "/c/repo", "C:/repo/src/app.py",    "src/app.py"),
+        ("msys root drivefm", "msys", "/mnt", "", "C:/repo", "/c/repo/src/app.py",    "src/app.py"),
+        # --- WSL with [automount] root = / in /etc/wsl.conf: /c IS the drive ---
+        ("wsl automount=/",   "wsl", "",     "", "/c/repo", "/c/repo/src/app.py",     "src/app.py"),
+        ("wsl automount=/ <-win", "wsl", "", "", "/c/repo", "C:\\repo\\src\\app.py",  "src/app.py"),
+        # --- plain Linux: NOTHING may be re-spelled or folded ---
+        ("linux native",      "linux", "/mnt", "", "/srv/repo", "/srv/repo/src/app.py", "src/app.py"),
+        ("linux real /mnt/c", "linux", "/mnt", "", "/mnt/c/repo", "/mnt/c/repo/src/app.py", "src/app.py"),
+    )
+
+    #: paths that must NOT relativize -- a false match here widens a wall
+    NEGATIVES = (
+        ("linux is case-sensitive", "linux", "/mnt", "", "/srv/Repo", "/srv/repo/src/app.py"),
+        ("linux /c is not a drive", "linux", "/mnt", "", "/mnt/c/repo", "/c/repo/src/app.py"),
+        ("linux /mnt not rewritten", "linux", "/mnt", "", "/srv/repo", "/mnt/c/other/f.py"),
+        ("wsl automount=/ ignores /mnt", "wsl", "", "", "/c/repo", "/mnt/c/repo/src/app.py"),
+        ("different drive", "wsl", "/mnt", "", "/mnt/c/repo", "D:\\repo\\src\\app.py"),
+    )
+
+    def _run(self, platform, mountroot, distro, root, path, expr):
+        script = (
+            '. "%s/hooklib.sh" >/dev/null 2>&1 || exit 97; '
+            'REPO_ROOT=%s; rt_repo_rel_var %s; %s'
+            % (HOOKS_PATH_STR, shlex_quote(root), shlex_quote(path), expr)
+        )
+        env = dict(os.environ)
+        env["RT_PLATFORM"] = platform
+        env["RT_MOUNTROOT"] = mountroot
+        env["WSL_DISTRO_NAME"] = distro
+        env.pop("MSYSTEM", None)
+        r = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
+                           timeout=60, env=env)
+        if r.returncode == 97:
+            raise unittest.SkipTest("hooklib.sh not present")
+        return r.stdout.strip()
+
+    def test_every_dialect_reduces_to_the_same_relative_path(self):
+        for label, plat, mroot, distro, root, path, want in self.CASES:
+            with self.subTest(case=label):
+                self.assertEqual(
+                    self._run(plat, mroot, distro, root, path, 'printf "%s" "$RT_REL"'),
+                    want,
+                    "%s: %r under root %r did not reduce. An unreduced path stays "
+                    "ABSOLUTE, and then .context/ stops matching the governing "
+                    "corpus -- a Tier 2b wall that is simply not there." % (label, path, root))
+
+    def test_negative_paths_that_are_genuinely_elsewhere_do_not_reduce(self):
+        for label, plat, mroot, distro, root, path in self.NEGATIVES:
+            with self.subTest(case=label):
+                got = self._run(plat, mroot, distro, root, path, 'printf "%s" "$RT_REL"')
+                self.assertTrue(
+                    got.startswith("/") or got.startswith(".."),
+                    "%s: %r relativized against root %r to %r. Over-matching here "
+                    "means a path outside the repo is treated as inside it."
+                    % (label, path, root, got))
+
+    def test_a_repo_on_an_ntfs_mount_is_treated_as_case_insensitive(self):
+        """The fail-OPEN one, and the reason this is a wall not a nuisance.
+
+        Case-insensitivity is a property of the VOLUME, not of the shell. WSL
+        with the repo under /mnt/c is Linux bash on an NTFS filesystem: the
+        old $OSTYPE test answered 'is the SHELL Windows', said no, and compared
+        case-sensitively on a case-insensitive filesystem -- so `Guard.sh` did
+        not match the control-set entry `guard.sh`, and the never-escalatable
+        wall was one shifted letter wide.
+        """
+        for plat, mroot, root, want in (
+            ("wsl",   "/mnt", "/mnt/c/repo",  "1"),   # NTFS via WSL   -> fold
+            ("wsl",   "/mnt", "/home/u/repo", "0"),   # ext4 in distro -> do not
+            ("msys",  "/mnt", "/c/repo",      "1"),   # Git-Bash       -> fold
+            ("linux", "/mnt", "/srv/repo",    "0"),   # real Linux     -> do not
+        ):
+            with self.subTest(platform=plat, root=root):
+                self.assertEqual(
+                    self._run(plat, mroot, "", root, root + "/src/app.py",
+                              'printf "%s" "$RT_WINPATH"'),
+                    want,
+                    "RT_WINPATH decides whether every deny list (secrets, governing "
+                    "corpus, control set) folds case. Wrong on %s/%s means the wall "
+                    "is either bypassable by case or fires on POSIX siblings." % (plat, root))
+
+    def test_the_control_set_wall_holds_against_case_variation_on_ntfs(self):
+        """End-to-end version of the above, through the real matcher."""
+        script = (
+            '. "%s/hooklib.sh" >/dev/null 2>&1 || exit 97; '
+            'CONTROL_SET="settings.json\nguard.sh\nhooklib.sh"; '
+            'REPO_ROOT=/mnt/c/repo; '
+            'for n in guard.sh Guard.sh GUARD.SH; do '
+            '  if rt_path_matches_list "/mnt/c/repo/.claude/hooks/$n" "$CONTROL_SET"; '
+            '  then printf "walled "; else printf "OPEN(%%s) " "$n"; fi; done'
+            % HOOKS_PATH_STR
+        )
+        env = dict(os.environ)
+        env.update({"RT_PLATFORM": "wsl", "RT_MOUNTROOT": "/mnt"})
+        env.pop("MSYSTEM", None)
+        r = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
+                           timeout=60, env=env)
+        if r.returncode == 97:
+            raise unittest.SkipTest("hooklib.sh not present")
+        self.assertNotIn(
+            "OPEN(", r.stdout,
+            "a control-set file was reachable by changing its case on an NTFS mount. "
+            "No approval lifts the control set; a wall that a shift key opens is not "
+            "a wall.\ngot=%r" % r.stdout)
 
 
 class TestWindowsPathsAreCaseInsensitive(unittest.TestCase):

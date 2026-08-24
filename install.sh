@@ -608,6 +608,44 @@ else
   HOST_FATAL=1
 fi
 
+# --- which path dialect will this install actually run in? -----------------
+# The harness reduces six spellings of one directory to whichever one this
+# shell can use (hooklib.sh rt_canon_abs). Print what was detected, because a
+# wrong answer here is the difference between "every gate works" and "every
+# gate compares two spellings of the same path and disagrees with itself" --
+# and because "which environment am I even in" is the question a Windows user
+# most often gets wrong (Git-Bash and WSL look identical at the prompt).
+RT_PLAT="linux"
+case "${OSTYPE:-}${MSYSTEM:-}" in *[Mm]sys*|*[Cc]ygwin*|*[Mm]ingw*) RT_PLAT="msys" ;; esac
+if [ "$RT_PLAT" = "linux" ]; then
+  if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ]; then
+    RT_PLAT="wsl"
+  elif [ -r /proc/sys/kernel/osrelease ] &&
+       grep -qi 'microsoft\|wsl' /proc/sys/kernel/osrelease 2>/dev/null; then
+    RT_PLAT="wsl"
+  fi
+fi
+case "$RT_PLAT" in
+  msys) ok "environment: Git-Bash / MSYS (paths spelled /c/...)" ;;
+  wsl)  ok "environment: WSL${WSL_DISTRO_NAME:+ ($WSL_DISTRO_NAME)} (paths spelled /mnt/c/... for Windows drives)" ;;
+  *)    ok "environment: Linux/POSIX" ;;
+esac
+# A repo on the Windows filesystem from inside WSL is CORRECT and supported --
+# it is just slow, because every hook firing crosses the 9p bridge. Say the
+# number rather than the adjective; a gate that takes a second is a gate the
+# operator learns to resent.
+if [ "$RT_PLAT" = "wsl" ]; then
+  case "$TARGET" in
+    /mnt/*|/cygdrive/*)
+      warn "this repo lives on the Windows filesystem ($TARGET)."
+      say "        Supported and correct -- the harness reduces the path dialects for you."
+      say "        But every hook firing crosses WSL's 9p bridge to NTFS, and the hook"
+      say "        suite measures roughly 10-15x slower there than inside the distro."
+      say "        If the runs feel sluggish, that is this, and moving the repo to"
+      say "        ~/ inside WSL is the whole fix." ;;
+  esac
+fi
+
 # --- can PYTHON spawn a working bash? (the WSL relay trap) -----------------
 # This script IS bash, so bash obviously works here. That proves nothing about
 # what the Python side gets: test_hooks.py drives every hook by spawning bash,
