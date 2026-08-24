@@ -70,16 +70,30 @@ esac
 # ------------------------------------------------------------------------------ escalation binding
 # escalation-lib.sh is owned by another builder. If it is absent we FAIL CLOSED: every rule is
 # treated as never-escalatable, so a missing library can only ever make the guard stricter.
-G_ESC=0
-if [ -f "$HOOKS_DIR/escalation-lib.sh" ]; then
-  # shellcheck disable=SC1090,SC1091
-  . "$HOOKS_DIR/escalation-lib.sh" 2>/dev/null && G_ESC=1
-fi
-if [ "$G_ESC" = "1" ]; then
-  declare -F esc_is_never_escalatable >/dev/null 2>&1 || G_ESC=0
-  declare -F esc_check_approval       >/dev/null 2>&1 || G_ESC=0
-  declare -F esc_record_refusal       >/dev/null 2>&1 || G_ESC=0
-fi
+# LOADED LAZILY, and the laziness is load-bearing for speed rather than tidiness.
+# escalation-lib.sh is ~1,780 lines - more than half of all the shell this hook would otherwise
+# source - and NOTHING outside g_refuse ever calls into it. This hook runs on EVERY tool call and
+# the overwhelming majority of those are ALLOWED, so sourcing it up front spent ~12ms of every
+# ~72ms firing (17%) on machinery the allow path never touches. Under Git-Bash, where process and
+# file I/O are emulated, that same fraction is roughly ten times the wall clock.
+# FAIL-CLOSED IS UNCHANGED: if the library cannot be loaded at the moment a refusal needs it, every
+# rule is treated as never-escalatable exactly as before. The question is asked when the answer is
+# needed instead of on every firing; it is not asked less strictly.
+G_ESC=""     # "" = not yet resolved · 0 = unusable, fail closed · 1 = ready
+g_esc_ready() {
+  [ -n "$G_ESC" ] && { [ "$G_ESC" = "1" ]; return; }
+  G_ESC=0
+  if [ -f "$HOOKS_DIR/escalation-lib.sh" ]; then
+    # shellcheck disable=SC1090,SC1091
+    . "$HOOKS_DIR/escalation-lib.sh" 2>/dev/null && G_ESC=1
+  fi
+  if [ "$G_ESC" = "1" ]; then
+    declare -F esc_is_never_escalatable >/dev/null 2>&1 || G_ESC=0
+    declare -F esc_check_approval       >/dev/null 2>&1 || G_ESC=0
+    declare -F esc_record_refusal       >/dev/null 2>&1 || G_ESC=0
+  fi
+  [ "$G_ESC" = "1" ]
+}
 
 CMD=""
 TOOL=""
@@ -91,7 +105,7 @@ g_refuse() {
   local sha="" esc_id never=1 d msg
   sha=$(rt_sha256_str "$CMD" 2>/dev/null) || sha=""
 
-  if [ "$G_ESC" = "1" ] && ! esc_is_never_escalatable "$rule" 2>/dev/null; then
+  if g_esc_ready && ! esc_is_never_escalatable "$rule" 2>/dev/null; then
     never=0
     # No digest tool means no way to bind an approval to these exact bytes -> no approval exists.
     if [ -n "$sha" ] && esc_check_approval "$rule" "Bash" "$sha" 2>/dev/null; then

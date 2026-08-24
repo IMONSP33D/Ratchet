@@ -52,17 +52,25 @@ case "${1:-}" in
   --list-rules) rt_rule_ids; exit 0 ;;
 esac
 
-# escalation binding - absent library means every rule is treated as never-escalatable (fail closed)
-S_ESC=0
-if [ -f "$HOOKS_DIR/escalation-lib.sh" ]; then
-  # shellcheck disable=SC1090,SC1091
-  . "$HOOKS_DIR/escalation-lib.sh" 2>/dev/null && S_ESC=1
-fi
-if [ "$S_ESC" = "1" ]; then
-  declare -F esc_is_never_escalatable >/dev/null 2>&1 || S_ESC=0
-  declare -F esc_check_approval       >/dev/null 2>&1 || S_ESC=0
-  declare -F esc_record_refusal       >/dev/null 2>&1 || S_ESC=0
-fi
+# escalation binding - absent library means every rule is treated as never-escalatable (fail closed).
+# Loaded LAZILY: ~1,780 lines that only s_refuse ever calls, on a hook that fires for every Edit and
+# Write. See the same note in guard.sh. Fail-closed semantics are identical; the question is asked
+# when a refusal needs the answer instead of on every firing.
+S_ESC=""     # "" = not yet resolved · 0 = unusable, fail closed · 1 = ready
+s_esc_ready() {
+  [ -n "$S_ESC" ] && { [ "$S_ESC" = "1" ]; return; }
+  S_ESC=0
+  if [ -f "$HOOKS_DIR/escalation-lib.sh" ]; then
+    # shellcheck disable=SC1090,SC1091
+    . "$HOOKS_DIR/escalation-lib.sh" 2>/dev/null && S_ESC=1
+  fi
+  if [ "$S_ESC" = "1" ]; then
+    declare -F esc_is_never_escalatable >/dev/null 2>&1 || S_ESC=0
+    declare -F esc_check_approval       >/dev/null 2>&1 || S_ESC=0
+    declare -F esc_record_refusal       >/dev/null 2>&1 || S_ESC=0
+  fi
+  [ "$S_ESC" = "1" ]
+}
 
 S_TOOL=""
 S_PATH=""
@@ -83,7 +91,7 @@ s_refuse() {
   local sha="" esc_id never=1 d msg
   sha=$(s_target_sha) || sha=""
 
-  if [ "$S_ESC" = "1" ] && ! esc_is_never_escalatable "$rule" 2>/dev/null; then
+  if s_esc_ready && ! esc_is_never_escalatable "$rule" 2>/dev/null; then
     never=0
     if [ -n "$sha" ] && esc_check_approval "$rule" "$S_TOOL" "$sha" 2>/dev/null; then
       rt_log_cmd "$S_TOOL" "ALLOW-APPROVED" "$rule" "$sha" "$S_REL"
