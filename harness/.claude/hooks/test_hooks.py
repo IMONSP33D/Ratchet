@@ -218,7 +218,6 @@ def _resolve_bash():
         for n in names:
             c = os.path.join(d, n)
             if os.path.isfile(c):
-                (relays if is_relay(c) else cands.append) and None
                 if is_relay(c):
                     relays.append(c)
                 else:
@@ -521,24 +520,47 @@ class RepoCase(unittest.TestCase):
 
         Replacing PATH wholesale would also hide bash and the test would then
         pass for the wrong reason.
+
+        Windows notes, both learned from a real Git-Bash run:
+        - pathlib's is_dir()/iterdir() RAISE PermissionError on unreadable PATH
+          entries (the systemprofile WindowsApps dir is on PATH on some hosts),
+          so every per-directory step sits inside one try/except OSError.
+        - symlink_to() needs Developer Mode; os.link() works unprivileged on
+          the same NTFS volume, so it is the fallback. If the farm still ends
+          up empty the test SKIPS loudly rather than running against an empty
+          PATH, where every binary is missing and a block proves nothing.
         """
+        dropset = set(drop)
+        if os.name == "nt":
+            dropset |= {n + ext for n in drop for ext in (".exe", ".bat", ".cmd", ".com")}
         fake = self.tmp / ("nopath-" + "-".join(drop))
         fake.mkdir(parents=True, exist_ok=True)
+        linked = 0
         for d in os.environ.get("PATH", "").split(os.pathsep):
-            dp = Path(d)
-            if not dp.is_dir():
-                continue
             try:
+                dp = Path(d)
+                if not d or not dp.is_dir():
+                    continue
                 entries = list(dp.iterdir())
             except OSError:
                 continue
             for f in entries:
-                if f.name in drop or (fake / f.name).exists():
-                    continue
                 try:
-                    (fake / f.name).symlink_to(f)
+                    if f.name in dropset or (fake / f.name).exists():
+                        continue
+                    try:
+                        (fake / f.name).symlink_to(f)
+                    except OSError:
+                        os.link(str(f), str(fake / f.name))
+                    linked += 1
                 except OSError:
                     pass
+        if linked == 0:
+            raise unittest.SkipTest(
+                "could not build a %s-less PATH on this host (no symlink or "
+                "hardlink support into the temp dir); run this once on a host "
+                "without %s installed to prove the fail-closed path"
+                % ("/".join(drop), "/".join(drop)))
         return str(fake)
 
 
@@ -4441,7 +4463,11 @@ class TestBashIsResolvedByProbe(unittest.TestCase):
             me = str(pathlib.Path(__file__).resolve())
             r = subprocess.run([sys.executable, me, "--list"],
                                capture_output=True, text=True, env=env, timeout=120)
-            m = re.search(r"ratchet self-test: bash=(\S+)", r.stderr or "")
+            # The banner separates fields with TWO spaces because the bash path
+            # itself may contain one (C:\Program Files\Git\bin\bash.exe). \S+
+            # truncated that to "C:\Program" and the verification spawn died
+            # with WinError 2 - the test failing on its own regex, not the probe.
+            m = re.search(r"ratchet self-test: bash=(.+?)  python=", r.stderr or "")
             self.assertIsNotNone(
                 m, "the suite did not report which bash it chose; that banner is how a "
                    "human diagnoses this failure at all. stderr=%r" % (r.stderr or "")[:400])
