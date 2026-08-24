@@ -35,7 +35,7 @@
 #   --force                   proceed despite a dirty worktree
 #   --substitute-only         only re-run {{MARKER}} substitution
 #   --uninstall               reverse the install, restoring backups
-#   --no-verify               skip running test_hooks.py at the end
+#   --no-verify               skip install verification\n#   --verify <tier>           install (default) | smoke | quick | full | none
 #   --quiet | -q              errors and the final summary only
 #   --no-color                never emit colour (same as NO_COLOR=1)
 #   --ascii                   plain ASCII frames; no box-drawing characters
@@ -55,10 +55,17 @@ set -uo pipefail
 # half-finished install. Every step that matters checks its own exit status.
 
 RT_INSTALLER_VERSION="1.2.2"
-# Install verification tier: quick (default, ~25s) | full (~95s) | smoke (~1s) | none.
-# Quick is every security wall and meta-invariant. Full is the whole suite and is
-# what you run once, and after any control-layer change.
-VERIFY_TIER="${RATCHET_VERIFY_TIER:-quick}"
+# Install verification tier:
+#   install (DEFAULT, ~0.5s) - install-verify.sh: did the deployment land, and do
+#                              the gates work ON THIS MACHINE. This is the question
+#                              an install has to answer, and the only one.
+#   smoke (~3s) quick (~30s) full (~95s) - test_hooks.py, Ratchet's OWN test suite.
+#                              It proves the harness LOGIC is right, which is a
+#                              question about Ratchet, not about your install. It
+#                              belongs in CI on the Ratchet repo. Available here for
+#                              when you are debugging the harness itself.
+#   none - skip.
+VERIFY_TIER="${RATCHET_VERIFY_TIER:-install}"
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || {
   printf 'install: cannot resolve my own directory\n' >&2; exit 2; }
@@ -1959,6 +1966,36 @@ if [ "$VERIFY_TIER" = "none" ]; then RUN_VERIFY=0; fi
 
 if [ "$RUN_VERIFY" = "1" ] && [ "$DRY_RUN" != "1" ]; then
   rt_phase 7 "Install verification"
+  # --- the default: purpose-built install verification ---------------------
+  # Two questions, and only two: did the files land, and do the gates behave on
+  # THIS host. Everything else test_hooks.py checks is a question about
+  # Ratchet's own logic, which is settled in CI and does not change because of
+  # whose machine it was copied onto.
+  if [ "$VERIFY_TIER" = "install" ]; then
+    if [ -f "$TARGET/.claude/hooks/install-verify.sh" ]; then
+      VOUT="$(cd "$TARGET" && bash .claude/hooks/install-verify.sh --target "$TARGET" 2>&1)"
+      VERIFY_RC=$?
+      printf '%s\n' "$VOUT" | sed 's/^/  /'
+      case "$VERIFY_RC" in
+        0) VERIFY_STATE="PASS" ;;
+        1) VERIFY_STATE="PASS (warnings)" ;;
+        *) VERIFY_STATE="FAILED"
+           printf '\n'
+           rt_rule "$C_R"
+           printf '  %sVERIFICATION FAILED.%s The files are installed, but something above is\n' "$C_R$C_B" "$C_0"
+           printf '  wrong and the harness cannot be trusted on this machine yet. Each FAIL\n'
+           printf '  line says what broke and why it matters. Re-run any time with:\n\n'
+           printf '      cd %s && bash .claude/hooks/install-verify.sh\n\n' "$TARGET"
+           printf '  Do not start a milestone on a failed verification: the whole value of\n'
+           printf '  this harness is that a refusal means something.\n'
+           rt_rule "$C_R"
+           printf '\n' ;;
+      esac
+    else
+      VERIFY_STATE="SKIPPED (install-verify.sh not installed)"
+      warn "install-verify.sh is not present, so the install was NOT verified."
+    fi
+  else
   VERIFY_FLAG=""
 case "$VERIFY_TIER" in
   quick) VERIFY_FLAG="--quick" ;;
@@ -2053,6 +2090,7 @@ if [ -f "$TARGET/.claude/hooks/test_hooks.py" ]; then
     warn "test_hooks.py is not present, so the install was NOT verified."
     say "        An unverified control layer is the one thing this harness cannot"
     say "        check for you. Run the suite as soon as the file exists."
+  fi
   fi
 
   # --- postcondition baseline ---------------------------------------------
