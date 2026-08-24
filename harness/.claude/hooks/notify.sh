@@ -159,7 +159,7 @@ _flatten() { printf '%s' "$(printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/  */ /
 
 _selftest() {
   local fail=0 got
-  got="$(_classify 'This refusal is ESCALATABLE (id=abc)')"
+  got="$(_classify 'RATCHET BLOCK: a Hard Stop fired; raise a Decision Card')"
   [ "$got" = "escalation" ] || { echo "FAIL classify escalation: $got"; fail=1; }
   got="$(_classify 'Claude needs your permission to use Bash')"
   [ "$got" = "permission-stall" ] || { echo "FAIL classify permission: $got"; fail=1; }

@@ -342,7 +342,7 @@ runs are declared in `MILESTONES.md` as their own WIN block with a run type of `
 4. **Daily:** one line appended to `run-journal.md` — uptime, WIN metrics, halt-trigger status.
    Nothing else.
 5. **Halt triggers stop the process and write `.pipeline/postmortem.md`.** They are **outcomes, not
-   escalations** — no Notification hook, no waiting for a human.
+   human input** — no Notification hook, no waiting.
 6. **Completion, clean or halted, opens a new standard run** scoped to evaluating it, ending in a
    normal Ship Prompt. A soak is never evaluated inside the run that launched it.
 
@@ -354,8 +354,8 @@ run is the one that closes the soak's WIN rows.
 ## The control layer — 24 scripts in `.claude/hooks/`, plus 3 stack packs
 
 Agents never edit any of these. Seven of them (`settings.json`, `guard.sh`, `scope-guard.sh`,
-`hooklib.sh`, `escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`) are the **control set**: Tier 2b
-and never-escalatable, because the files that decide what an approval means cannot be changed by one.
+`hooklib.sh`, `ratchet.config.sh`) are the **control set**: Tier 2b and permanently refused, because
+the files that decide what an agent may do cannot be changed by an agent.
 
 ### Event-wired (8)
 
@@ -391,18 +391,17 @@ and the repeat-failure hash stop (**same failure twice with no diff change = imm
 
 ### Manual, agent-invocable (7)
 
-`dispatch-baseline.sh` · `checkpoint-evidence.sh` · `gc-prune.sh` · `escalate.sh` ·
+`dispatch-baseline.sh` · `checkpoint-evidence.sh` · `gc-prune.sh` ·
 `pipeline-event.sh` · `proof_map.py` · `run_metrics.py`
 
 ### Human-only (2)
 
-`approve.sh` — denied to the agent at three layers, requires a TTY, refuses never-escalatable ids.
 `interview.sh` — generates the domain pack from nine questions; safe to re-run, and your previous
 answers become the defaults.
 
 ### Libraries, config and checkers (6)
 
-`hooklib.sh` · `escalation-lib.sh` · `esc_payload.py` (derives the sha256 an approval binds to) ·
+`hooklib.sh` ·
 `ratchet.config.sh` (core) · `domain.config.sh` (domain pack) · `check_done.py` (definition of done:
 two load-bearing checks as of 2026-08-23 — changed-file manifest, verify-gate artifact)
 

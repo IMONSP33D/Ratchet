@@ -10,29 +10,14 @@
 #   FAIL       required condition not met            -> exit 1
 #   WARN       worth saying; never blocks             (e.g. ROLLOVER-REQUIRED)
 #   SKIP       not applicable in this run/tier
-#   DISCLOSED  a human read this exact failure text and ruled the run may ship
-#              with it disclosed. Rendered DISCLOSED, NEVER PASS; excluded from
 #              the exit code ONLY; reprinted in full every time.
 #
-# DISCLOSURE INTERFACE (owned by escalation-lib.sh; probed, never re-implemented):
-#     . escalation-lib.sh
-#     rt_esc_disclosed "<check-name>" "<sha256 of the failure text>"
-#         exit 0 = disclosed, non-zero = not disclosed
-#   The failure text hashed is EXACTLY the `detail` string this file prints for
-#   the check, utf-8, no trailing newline. A different failure of the same check
-#   hashes differently and therefore blocks --- which is the point.
-#   If escalation-lib.sh is absent or does not implement it: NOTHING is
-#   disclosed (fail closed --- a missing library never hides a red).
+# NO DISCLOSURE INTERFACE. The escalation channel was removed 2026-08-24
+# (decisions doc ruling 3), and a "disclosure" was a human ruling minted
+# through it that let a specific red ship anyway. With no channel there is
+# nothing to mint: a red is a red, and this checker either passes or fails.
 #
-# NEVER-ESCALATABLE INTERFACE, same probing discipline:
-#     rt_esc_never_escalatable "<rule-id>"   exit 0 = never escalatable
-#     rt_esc_never_list                      one rule id per line   (fallback)
-#
-# Stdlib only. utf-8 on every open. No project nouns. Config values are READ
-# from ratchet.config.sh --- no default is duplicated in Python.
-#
-# EXIT CODES
-#   0  every required check PASSed (DISCLOSED / WARN / SKIP do not block)
+#   0  every required check PASSed (WARN / SKIP do not block)
 #   1  at least one required check FAILed
 #   2  usage error
 #   3  environment error (config missing, not a repo) --- fail closed
@@ -66,19 +51,19 @@ import shutil
 import subprocess
 import tempfile
 
-PASS, FAIL, WARN, SKIP, DISCLOSED = "PASS", "FAIL", "WARN", "SKIP", "DISCLOSED"
+PASS, FAIL, WARN, SKIP = "PASS", "FAIL", "WARN", "SKIP"
 
 CONFIG_KEYS = [
     "REPO_ROOT", "PIPELINE_DIR", "CONTEXT_DIR", "DEV_DIR", "CLAUDE_DIR",
     "HOOKS_DIR", "EVIDENCE_DIR", "SECRETS_DIR",
     "RUN_ACTIVE", "RUN_START", "READY_TO_SHIP", "PLAN_FILES", "AMENDMENTS",
     "FINDINGS", "VERIFY_LAST", "RED_BASELINE", "SHIP_CONSENT", "RECAP",
-    "CHECKPOINTS_DIR", "ESCALATIONS_DIR", "EVENTS_LOG", "METRICS_JSON",
+    "CHECKPOINTS_DIR", "EVENTS_LOG", "METRICS_JSON",
     "RUN_JOURNAL", "CONTEXT_LIVE", "ACTIVE_LESSONS", "PENDING_ACTIONS",
     "BASE_BRANCH", "AGENT_BRANCH_PREFIX",
     "CAP_RATIONALE_FIXED", "CAP_RATIONALE_ACCEPTED", "CAP_RECAP_WORDS",
     "DECISIONS_HOT_SOFT_LINES", "DECISIONS_HOT_HARD_LINES",
-    "MAX_REVIEW_ROUNDS", "ESCALATION_LEDGER", "STACK_NAME", "FAILURE_LINE_REGEX",
+    "MAX_REVIEW_ROUNDS", "STACK_NAME", "FAILURE_LINE_REGEX",
 ]
 
 # --- frozen artifact shapes (CONTRACT.md 7) --------------------------------
@@ -182,7 +167,6 @@ class Ctx(object):
         self.root = root
         self.cfg_path = cfg_path
         self.cfg = cfg
-        self._esc_lib = None
         self.tier = tier or self.detect_tier()
 
     # -- config accessors --
@@ -238,39 +222,6 @@ class Ctx(object):
     def head(self):
         return self.git("rev-parse", "HEAD")
 
-    # -- escalation library probing (never re-implement the HMAC or rule sets) --
-    def esc_lib(self):
-        if self._esc_lib is None:
-            hooks = self.path("HOOKS_DIR") or self.hooks_dir
-            cand = os.path.join(hooks, "escalation-lib.sh")
-            if not os.path.isfile(cand):
-                cand = os.path.join(self.hooks_dir, "escalation-lib.sh")
-            self._esc_lib = cand if os.path.isfile(cand) else ""
-        return self._esc_lib
-
-    def esc_call(self, func, *args):
-        """Return (rc, stdout). rc 8 = function absent, 9 = lib unsourceable,
-        10 = no library at all."""
-        lib = self.esc_lib()
-        if not lib:
-            return 10, ""
-        snippet = ('set -u; lib="$1"; fn="$2"; shift 2; '
-                   '. "$lib" >/dev/null 2>&1 || exit 9; '
-                   'command -v "$fn" >/dev/null 2>&1 || exit 8; "$fn" "$@"')
-        try:
-            proc = subprocess.run(["bash", "-c", snippet, "bash", lib, func] +
-                                  [str(a) for a in args],
-                                  cwd=self.root, capture_output=True, text=True,
-                                  timeout=60, stdin=subprocess.DEVNULL,
-                                  env=dict(os.environ, CLAUDE_PROJECT_DIR=self.root))
-            return proc.returncode, proc.stdout.replace("\r", "").strip()
-        except Exception:
-            return 9, ""
-
-    def disclosed(self, check_name, detail):
-        sha = hashlib.sha256(detail.encode("utf-8")).hexdigest()
-        rc, _ = self.esc_call("rt_esc_disclosed", check_name, sha)
-        return rc == 0
 
     # narrative()/metrics() sibling-delegation methods (used by the removed
     # narrative/metrics checks) were removed with checks 3-19, 2026-08-23.
@@ -641,8 +592,6 @@ def run_checks(ctx, only=None):
             r = Result(number, name, FAIL,
                        "checker raised %s: %s (fail closed)"
                        % (type(exc).__name__, exc))
-        if r.status == FAIL and ctx.disclosed(r.name, r.detail):
-            r.status = DISCLOSED
         results.append(r)
     return results
 
@@ -656,24 +605,13 @@ def render(results, ctx, as_json=False):
             "generated_at": utc_now_iso(),
             "results": [r.to_dict() for r in results],
             "failed": [r.name for r in results if r.status == FAIL],
-            "disclosed": [r.name for r in results if r.status == DISCLOSED],
         }, indent=2)
     out = []
     out.append("definition of done --- tier=%s milestone=%s head=%s"
                % (ctx.tier, ctx.milestone() or "-", (ctx.head() or "?")[:12]))
     for r in results:
         out.append("%2d %-16s %-9s %s" % (r.number, r.name, r.status, r.detail))
-    dis = [r for r in results if r.status == DISCLOSED]
-    if dis:
-        out.append("")
-        out.append("DISCLOSED reds --- reprinted in full at every block. A "
-                   "disclosure never means the check passes; it means a human read "
-                   "this exact failure and ruled the run may ship with it disclosed:")
-        for r in dis:
-            out.append("  [%s] %s" % (r.name, r.detail))
-    fails = [r for r in results if r.status == FAIL]
-    out.append("")
-    out.append("%d PASS / %d FAIL / %d WARN / %d DISCLOSED / %d SKIP"
+    out.append("%d PASS / %d FAIL / %d WARN / %d SKIP"
                % (len([r for r in results if r.status == PASS]), len(fails),
                   len([r for r in results if r.status == WARN]), len(dis),
                   len([r for r in results if r.status == SKIP])))
@@ -704,8 +642,7 @@ RED_BASELINE=".pipeline/red-baseline.txt"
 SHIP_CONSENT=".pipeline/ship-consent.json"
 RECAP=".pipeline/recap.md"
 CHECKPOINTS_DIR=".pipeline/checkpoints"
-ESCALATIONS_DIR=".pipeline/escalations"
-ESCALATION_LEDGER=".pipeline/escalations/ledger.jsonl"
+
 EVENTS_LOG=".pipeline/run-events.jsonl"
 METRICS_JSON=".pipeline/run-metrics.json"
 RUN_JOURNAL=".pipeline/run-journal.md"
@@ -729,23 +666,6 @@ FAILURE_LINE_REGEX="^FAILED "
 COLLECT_TESTS_CMD='printf "tests/test_gate.py::test_head_match\\n"'
 """
 
-# Stub escalation library: documents the interface check_done probes for.
-FIXTURE_ESC_LIB = """#!/usr/bin/env bash
-# Selftest stub for escalation-lib.sh --- the two functions check_done probes.
-rt_esc_never_list() {
-  printf '%s\\n' secrets force-push base-branch-write control-layer
-}
-rt_esc_never_escalatable() {
-  rt_esc_never_list | grep -qx -- "$1"
-}
-rt_esc_disclosed() {
-  f="${REPO_ROOT:-$PWD}/.pipeline/escalations/disclosures"
-  [ -f "$f" ] || return 1
-  grep -qx -- "$1 $2" "$f"
-}
-"""
-
-
 def _w(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
@@ -761,7 +681,6 @@ def build_good(root):
     """A repo that satisfies every check. Each mutator below breaks exactly one."""
     hooks = os.path.join(root, ".claude", "hooks")
     _w(os.path.join(hooks, "ratchet.config.sh"), FIXTURE_CONFIG)
-    _w(os.path.join(hooks, "escalation-lib.sh"), FIXTURE_ESC_LIB)
     _w(os.path.join(root, "src", "widget.py"), "VALUE = 1\n")
     _w(os.path.join(root, "tests", "test_gate.py"),
        "def test_head_match():\n    assert True\n")
@@ -788,7 +707,7 @@ def build_good(root):
     _w(os.path.join(root, ".pipeline", "plan-files.txt"),
        "src/widget.py\ntests/test_gate.py\n.context/MILESTONES.md\n"
        ".context/DECISIONS.md\ndocs/evidence/M1/win-01.txt\n"
-       ".claude/hooks/ratchet.config.sh\n.claude/hooks/escalation-lib.sh\n")
+       ".claude/hooks/ratchet.config.sh\n.claude/hooks/guard.sh\n")
     _w(os.path.join(root, ".pipeline", "manifest-amendments.txt"),
        "docs/evidence/M1/win-01.txt DEC-004 evidence capture\n")
     _w(os.path.join(root, ".pipeline", "findings.md"),
@@ -938,39 +857,24 @@ def selftest(verbose=False):
             elif verbose:
                 print("  %-16s FAIL as expected: %s" % (name, res[0].detail[:100]))
 
-        # --- 3. a disclosure renders DISCLOSED, never PASS, and clears exit -
-        root = os.path.join(tmp, "disclosed")
+        # --- 3. a red is a red: nothing can rule that it may ship ----------
+        # Until 2026-08-24 a human could mint a "disclosure" through the
+        # escalation channel and this checker would render the failure DISCLOSED
+        # and drop it from the exit code. The channel is gone, so the only
+        # honest outcome for a failing check is FAIL. This asserts the absence.
+        root = os.path.join(tmp, "no-disclosure")
         build_good(root)
         _mut_gate_artifact(root)
-        c = make_ctx(repo_root=root, tier="ship")
-        red = run_checks(c, only="gate-artifact")[0]
-        sha = hashlib.sha256(red.detail.encode("utf-8")).hexdigest()
+        os.makedirs(os.path.join(root, ".pipeline", "escalations"), exist_ok=True)
         _w(os.path.join(root, ".pipeline", "escalations", "disclosures"),
-           "gate-artifact %s\n" % sha)
-        c2 = make_ctx(repo_root=root, tier="ship")
-        res = run_checks(c2)
-        got = [r for r in res if r.name == "gate-artifact"][0]
-        if got.status != DISCLOSED:
+           "gate-artifact %s\n" % ("0" * 64))
+        c = make_ctx(repo_root=root, tier="ship")
+        got = run_checks(c, only="gate-artifact")[0]
+        if got.status != FAIL:
             ok_all = False
-            print("SELFTEST FAIL: disclosed failure should render DISCLOSED, got %s"
-                  % got.status)
-        if any(r.status == FAIL for r in res):
-            ok_all = False
-            print("SELFTEST FAIL: a disclosed red must be excluded from the exit "
-                  "code")
-        # a DIFFERENT failure of the same check must still block
-        p = os.path.join(root, ".pipeline", "verify-last.json")
-        d = json.loads(read_text(p))
-        d["exit"] = 1
-        d["tail"] = "FAILED tests/test_gate.py::test_head_match"
-        _w(p, json.dumps(d))
-        c3 = make_ctx(repo_root=root, tier="ship")
-        got2 = run_checks(c3, only="gate-artifact")[0]
-        if got2.status != FAIL:
-            ok_all = False
-            print("SELFTEST FAIL: a disclosure must bind to the failure TEXT; a "
-                  "different failure of the same check must block (got %s)"
-                  % got2.status)
+            print("SELFTEST FAIL: a leftover disclosures file changed a verdict; "
+                  "nothing may excuse a red now (got %s)" % got.status)
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("SELFTEST %s: check_done.py (%d checks, %d failure inputs)"

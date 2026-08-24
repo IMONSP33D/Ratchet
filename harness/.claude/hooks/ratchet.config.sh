@@ -74,7 +74,6 @@ fi
 export REPO_ROOT
 
 PROJECT_NAME="${PROJECT_NAME:-$(basename "$REPO_ROOT")}"
-ESCALATION_MODE="${ESCALATION_MODE:-light}"   # light | strict
 
 # --- directories (repo-relative; we are cd'd to REPO_ROOT) ----------------------------------
 PIPELINE_DIR="${PIPELINE_DIR:-.pipeline}"
@@ -99,7 +98,6 @@ RED_BASELINE="${RED_BASELINE:-$PIPELINE_DIR/red-baseline.txt}"
 SHIP_CONSENT="${SHIP_CONSENT:-$PIPELINE_DIR/ship-consent.json}"
 RECAP="${RECAP:-$PIPELINE_DIR/recap.md}"
 CHECKPOINTS_DIR="${CHECKPOINTS_DIR:-$PIPELINE_DIR/checkpoints}"
-ESCALATIONS_DIR="${ESCALATIONS_DIR:-$PIPELINE_DIR/escalations}"
 EVENTS_LOG="${EVENTS_LOG:-$PIPELINE_DIR/run-events.jsonl}"
 METRICS_JSON="${METRICS_JSON:-$PIPELINE_DIR/run-metrics.json}"
 CMD_LOG="${CMD_LOG:-$PIPELINE_DIR/cmd-log}"
@@ -142,11 +140,6 @@ CAP_CONTEXT_LIVE_LINES="${CAP_CONTEXT_LIVE_LINES:-150}"
 DECISIONS_HOT_SOFT_LINES="${DECISIONS_HOT_SOFT_LINES:-250}"
 DECISIONS_HOT_HARD_LINES="${DECISIONS_HOT_HARD_LINES:-300}"
 
-# --- escalation --------------------------------------------------------------------------------
-ESCALATION_KEY="${ESCALATION_KEY:-$SECRETS_DIR/escalation.key}"
-ESCALATION_TTL_SECONDS="${ESCALATION_TTL_SECONDS:-1800}"
-ESCALATION_LEDGER="${ESCALATION_LEDGER:-$ESCALATIONS_DIR/ledger.jsonl}"
-
 # --- notification --------------------------------------------------------------------------------
 RATCHET_WEBHOOK_URL="${RATCHET_WEBHOOK_URL:-}"   # https only; unset disables the pager
 
@@ -158,8 +151,6 @@ CONTROL_SET="${CONTROL_SET:-settings.json
 guard.sh
 scope-guard.sh
 hooklib.sh
-escalation-lib.sh
-approve.sh
 ratchet.config.sh}"
 
 # Path prefixes that are always in scope: agent scratch, the learning loop, and evidence.
@@ -254,10 +245,9 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ] && [ "${1:-}" = "--selftest" ]; then
   for _v in RT_VERSION REPO_ROOT PIPELINE_DIR CONTEXT_DIR DEV_DIR CLAUDE_DIR HOOKS_DIR \
             EVIDENCE_DIR SECRETS_DIR RUN_ACTIVE RUN_START RUN_IDLE RUN_LAST_SEEN READY_TO_SHIP \
             PLAN_FILES AMENDMENTS FINDINGS VERIFY_LAST RED_BASELINE SHIP_CONSENT RECAP \
-            CHECKPOINTS_DIR ESCALATIONS_DIR DISPATCH_DIR EVENTS_LOG METRICS_JSON CMD_LOG RUN_JOURNAL \
+            CHECKPOINTS_DIR DISPATCH_DIR EVENTS_LOG METRICS_JSON CMD_LOG RUN_JOURNAL \
             CONTEXT_LIVE ACTIVE_LESSONS PENDING_ACTIONS BASE_BRANCH AGENT_BRANCH_PREFIX \
-            MAX_STOP_RETRIES MAX_RUN_WORK_SECONDS IDLE_THRESHOLD_SECONDS ESCALATION_KEY \
-            ESCALATION_TTL_SECONDS ESCALATION_LEDGER; do
+            MAX_STOP_RETRIES MAX_RUN_WORK_SECONDS IDLE_THRESHOLD_SECONDS; do
     eval "_val=\${$_v:-}"
     if [ -z "$_val" ]; then printf '  FAIL: %s is empty\n' "$_v" >&2; exit 1; fi
   done

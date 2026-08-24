@@ -57,14 +57,14 @@ promise**. Four trees, four owners, enforced by `scope-guard.sh` and `guard.sh` 
 
 | Tree | Owner | Agent access | Lifetime |
 |---|---|---|---|
-| `.claude/` | The control layer | **Unwritable.** Hooks, agents, settings, and `doctrine/` — `CLAUDE.md`, `PIPELINE.md`, `TEMPLATE.md`, `UPGRADING.md`. The control set within it is never-escalatable; the rest is refused by default, changeable only by an approved byte-exact write. | Permanent |
+| `.claude/` | The control layer | **Unwritable.** Hooks, agents, settings, and `doctrine/` — `CLAUDE.md`, `PIPELINE.md`, `TEMPLATE.md`, `UPGRADING.md`. Every refusal here is final: the control set and the rest alike. | Permanent |
 | `.context/` | The human | **Read-only, Tier 2b.** Exactly three contracts — `SPEC.md`, `MILESTONES.md`, `DECISIONS.md` — plus `archive/decisions/`. Agents propose changes via `DECISIONS.md` and the retro. | Permanent |
 | `.pipeline/` | The agents | Read/write scratch. Pruned by `gc-prune.sh`; mostly gitignored. | **Run-scoped** — archived at gate closure |
 | `.agent-development/` | The learning loop | Append-only in spirit; scope-exempt; **never pruned**. | Permanent |
 
 Everything else — source, tests, docs, evidence — is ordinary work product, gated by the run's manifest.
 Two consequences: **a rule the agent could edit is not a rule** (hence the control set is
-never-escalatable even under an approval — the files that decide what an approval means cannot be changed
+permanently refused — the files that decide what an agent may do cannot be changed
 by one), and **a run-scoped tree MUST be cleared at gate closure** (a manifest from a closed milestone
 gating an unrelated session is a real failure mode). Writing SPEC.md and MILESTONES.md is the one moment
 an agent legitimately produces `.context/` content: once, before the first run, then handed over.

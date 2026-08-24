@@ -123,12 +123,6 @@ _bootstrap() {
   # shellcheck disable=SC1090,SC1091
   . "$lib" || return 1
   command -v rt_repo_root >/dev/null 2>&1 && { rt_repo_root >/dev/null 2>&1 || true; }
-  # escalation-lib is optional here: with it absent there are no disclosures,
-  # which is the stricter reading, so absence is fail-closed.
-  if [ -r "$RT_SELF_DIR/escalation-lib.sh" ]; then
-    # shellcheck disable=SC1090,SC1091
-    . "$RT_SELF_DIR/escalation-lib.sh" >/dev/null 2>&1 || true
-  fi
   return 0
 }
 
@@ -278,20 +272,11 @@ EOF
   return 0
 }
 
-# --- disclosures (§5.5) ---------------------------------------------------- #
-# Reprinted IN FULL at every block. The gate stops re-litigating a red a human
-# has ruled shall ship, but it never hides one.
-_disclosures_block() {
-  local out=""
-  if command -v esc_list_disclosures >/dev/null 2>&1; then
-    out="$(esc_list_disclosures 2>/dev/null)"
-  fi
-  [ -n "$out" ] || return 0
-  # esc_list_disclosures prints its own framing and the full failure text of
-  # every disclosure. It is reproduced verbatim, at EVERY block: a disclosed
-  # red stays visible forever, it just stops being re-litigated.
-  printf '\n%s\n' "$out"
-}
+# --- disclosures: REMOVED with the escalation channel (2026-08-24) ------------ #
+# A "disclosure" was a human ruling that a specific red may ship anyway, minted
+# through the approval channel. With no channel there is nothing to mint, and a
+# red is simply a red: the gate blocks until it is green or the run stops.
+_disclosures_block() { :; }
 
 # --- verify-last writer ---------------------------------------------------- #
 # The working-tree fingerprint input. See the dirty_hash note above for why

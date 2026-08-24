@@ -36,12 +36,11 @@ what the run believed about itself; the counters tell you what happened.
 
 | source | what it gives you |
 |---|---|
-| `.pipeline/run-events.jsonl` | every gate block, guard refusal, scope refusal, escalation, repeat-failure and stage marker, timestamped |
+| `.pipeline/run-events.jsonl` | every gate block, guard refusal, scope refusal, repeat-failure and stage marker, timestamped |
 | `.pipeline/run-metrics.json` | the rollup: dispatches by agent, time per stage, block counts, cap hits |
 | `.pipeline/findings.md` | findings by severity as filed, and their dispositions |
 | `.pipeline/checkpoints/*-clear.md` | every verdict, and how many rounds each took |
 | `.pipeline/cmd-log` | commands issued — including ones that stalled on a permission prompt |
-| `.pipeline/escalations/` and its archive | every request, approval, refusal, consumed record and disclosure — §8 audits these |
 | `.pipeline/run-journal.md`, `.pipeline/context-live.md` | the run's own account of itself |
 | `git log --oneline <base>..HEAD`, `--stat` | what actually landed |
 | `.agent-development/ACTIVE-LESSONS.md` | what previous runs already told us |
@@ -223,23 +222,19 @@ the process has now failed the same way three times without the cause being addr
 
 Also list hypotheses with no evidence yet, so a later run can confirm or kill them.
 
-## §8 — escalation audit
+## §8 — refusal audit
 
-Every approve-and-continue escalation this run, audited exactly as the orchestrator's Decision Cards are.
-Three findings this table exists to produce, in descending severity:
+Every refusal this run, read as a pattern rather than as incidents. Refusals are final now, so a
+blocked agent had to find another way or stop — which makes the refusal log a map of where the
+walls and the plan disagreed.
 
-1. **An escalation that lifted a never-escalatable rule.** That is not a finding about this run — it is a
-   defect in the control itself. Three components refuse that class independently (`escalate.sh`,
-   `approve.sh`, the guards), so a record existing at all means one of the three did not refuse. File it
-   CRITICAL and **name which one**.
-2. **The same rule id escalated twice in a row, or across two consecutive runs.** Repetition is evidence
-   the RULE is miscalibrated, not evidence the mechanism works. Escalation is a pressure valve; it is not
-   the fix for a rule that fires on the wrong things. Write the §7 row that fixes the rule's
-   false-positive class, or state plainly why these cases are genuinely exceptional.
-3. **A request the agent should never have filed.** Same test as a Decision Card the orchestrator could
-   have decided itself, and the same verdict: a defect this seat exists to find.
+Flag two things:
 
-`run_metrics.py --markdown` gives you the counts by rule; the judgment is yours.
+1. **The same rule id refused twice in a row, or across two consecutive runs.** Repetition is
+   evidence about the RULE or the PLAN, not about the agent. Either the wall is in the wrong place
+   or the work was scoped to need something it cannot have. Name which.
+2. **A refusal with no `Do this instead:` line.** That is a dead end in the control layer — the run
+   had nowhere to go. File it as a control-layer defect, not a run finding.
 
 ## Format budget — this document has a size, and it is checked
 
@@ -254,7 +249,7 @@ number:
   **recurrence**;
 - §6's promotion arithmetic;
 - any evidence pointer, artifact path, event id or `file:line`;
-- §8's escalation rows;
+- §8's refusal rows;
 - §9's re-measured verdict.
 
 A retro that hits its line count by dropping an evidence pointer has not been shortened; it has been
@@ -348,13 +343,10 @@ reading.
    and still the right choice when nobody is at the keyboard. Proposing it with the content written out
    costs you one section and costs them one paste; proposing it as "the decision log should be compacted"
    costs them the whole job.
-2. **Request approval for the write.** Attempt it, take the refusal, then `escalate.sh request <id>
-   "<why>"` and let the orchestrator raise a Decision Card. The human runs `approve.sh <id>` in their own
-   terminal, and the write proceeds for that one byte-exact call. Route 2 approves BYTES, so prefer
-   `Write` with the complete file — an `Edit` whose `old_string` appears more than once has no single
-   derivable result and cannot be approved at all.
+2. **Report the need and stop.** There is no approval to request: refusals are final. Say what
+   you needed to write and why, and let the orchestrator raise a Decision Card.
 
-**Neither route lets you rewrite the governing corpus or the control set.** Those are never-escalatable
+**Neither route lets you rewrite the governing corpus or the control set.** Those are permanently refused
 and the request is refused before it reaches a human. That refusal is not an obstacle to route around; it
 is the boundary that makes route 2 safe to have at all.
 

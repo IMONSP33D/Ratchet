@@ -50,10 +50,9 @@ and note it in your report — do not redefine anything that is listed.
       stack/<name>.sh           # STACK pack — command interface binding
       hooklib.sh guard.sh scope-guard.sh stop-gate.sh subagent-gate.sh
       red-gate.sh session-start.sh dispatch-baseline.sh checkpoint-evidence.sh
-      gc-prune.sh format.sh notify.sh pipeline-event.sh
-      escalation-lib.sh escalate.sh approve.sh interview.sh
+      gc-prune.sh format.sh notify.sh pipeline-event.sh install-verify.sh
+      interview.sh
       check_done.py proof_map.py run_metrics.py
-      esc_payload.py
       test_hooks.py
     commit-template.txt         # release-commit template; wired via commit.template
   .context/                     # HUMAN-OWNED contracts (Tier 2b) — exactly three
@@ -65,7 +64,7 @@ and note it in your report — do not redefine anything that is listed.
     _TEMPLATE-run-retro.md _TEMPLATE-consolidated.md
     runs/ consolidated/ metrics/ proposals/
   docs/evidence/                # WIN-row proof, probes
-  secrets/                      # escalation key ONLY; gitignored; 0700
+  secrets/                      # credentials, if any; gitignored; 0700
 ```
 
 **Ownership partition — the harness's core idea. Enforce it, state it, never blur it.**
@@ -86,7 +85,6 @@ user-facing overrides of core values; internal derived values need no prefix.
 RT_VERSION                 # harness semver, e.g. 1.0.0
 PROJECT_NAME               # human label; used in pager payloads and recap
 REPO_ROOT                  # resolved absolute repo root (see §4.1)
-ESCALATION_MODE            # light | strict          (default: light)
 
 # --- paths (all relative to REPO_ROOT unless noted) ---
 PIPELINE_DIR               # .pipeline
@@ -110,7 +108,6 @@ RED_BASELINE               # .pipeline/red-baseline.txt
 SHIP_CONSENT               # .pipeline/ship-consent.json
 RECAP                      # .pipeline/recap.md
 CHECKPOINTS_DIR            # .pipeline/checkpoints
-ESCALATIONS_DIR            # .pipeline/escalations
 EVENTS_LOG                 # .pipeline/run-events.jsonl
 METRICS_JSON               # .pipeline/run-metrics.json
 CMD_LOG                    # .pipeline/cmd-log
@@ -142,11 +139,6 @@ CAP_ACTIVE_LESSONS_LINES   # 100
 DECISIONS_HOT_SOFT_LINES   # 250
 DECISIONS_HOT_HARD_LINES   # 300
 
-# --- escalation ---
-ESCALATION_KEY             # secrets/escalation.key
-ESCALATION_TTL_SECONDS     # 1800
-ESCALATION_LEDGER          # .pipeline/escalations/ledger.jsonl
-
 # --- notification ---
 RATCHET_WEBHOOK_URL        # unset by default; https only
 ```
@@ -161,7 +153,6 @@ BANNED_READ_FILES                  # newline list; context-poisoning files
 GOVERNING_CORPUS                   # newline list; human-owned docs (Tier 2b)
 SECRET_PATTERNS                    # newline list; glob-ish patterns
 SECRET_EXEMPTIONS                  # newline list; e.g. .env.example
-DOMAIN_NEVER_ESCALATABLE           # newline list; extra rule ids that can never be lifted
 DOMAIN_LAWS                        # markdown block injected as laws 3-6
 DOMAIN_REVIEW_LENS                 # markdown block injected into reviewer
 DOMAIN_SECURITY_PASS               # markdown block injected into security-auditor
@@ -212,8 +203,7 @@ a `sed`/`grep` extraction for the *non-security* fields only. For security decis
 BLOCK** (this is the `fragile-consent-parse` fix).
 
 Manual (agent-invoked, allow-listed) scripts: `dispatch-baseline.sh`, `checkpoint-evidence.sh`,
-`gc-prune.sh`, `escalate.sh`, `pipeline-event.sh`, `proof_map.py`, `run_metrics.py`.
-Human-only (denied to agent at 3 layers): `approve.sh`.
+`gc-prune.sh`, `pipeline-event.sh`, `proof_map.py`, `run_metrics.py`, `install-verify.sh`.
 
 ---
 
@@ -269,7 +259,7 @@ if hasattr(sys.stdout, "reconfigure"):
 gc-prune.sh start <milestone>   -> writes RUN_ACTIVE (milestone id), RUN_START (epoch), zeroes RUN_IDLE
 gc-prune.sh reopen              -> re-arms an archived run WITHOUT resetting elapsed work
 gc-prune.sh archive <milestone> -> archives manifest+journal, clears RUN_ACTIVE/READY_TO_SHIP,
-                                   expires all escalation approvals, rotates EVENTS_LOG
+                                   rotates EVENTS_LOG
 gc-prune.sh prune               -> scratch hygiene only
 ```
 **With no run active, every scope check and the Stop gate's definition-of-done checks are INERT.**
@@ -301,33 +291,37 @@ The Stop gate halts on `work > MAX_RUN_WORK_SECONDS` or `wall > MAX_RUN_WALL_SEC
 > `.pipeline/dispatch/<id>.glob` and `.pipeline/dispatch/current`. Hooks read the FILES, and treat
 > the env vars as a fallback only.
 
-### 5.5 Escalation modes
-- **light (default).** Two classes: *never-escalatable* (hard wall) and *confirmable* (the guard
-  refuses, prints `This refusal is ESCALATABLE (id=<id>)`, and a human confirms by running
-  `approve.sh <id>` in their own terminal). Approval is single-use, TTL-bound, run-bound and
-  byte-bound, but the confirmable class is broad and the never class is small.
-- **strict.** Same mechanics, but the confirmable class shrinks and more rules move to never.
-Both modes use the same HMAC machinery. The MAC covers
-`version|id|rule|tool|target_sha|run_token|expiry`. Key is read by path (never argv), 0600.
-`approve.sh` requires a TTY and refuses never-escalatable ids.
-**Disclosure:** `approve.sh --disclose <check-id>` binds to the *failure text*, renders **DISCLOSED**
-(never PASS), is excluded from the exit code only, is reprinted in full at every subsequent block,
-and dies at gate closure.
+### 5.5 Refusals are final (no escalation)
 
-### 5.6 Never-escalatable core (harness-fixed, plus `DOMAIN_NEVER_ESCALATABLE`)
+There is no approval channel. It was removed 2026-08-24 after auditing all fifteen rules it could
+lift: none needed a human. Each was something the agent should do correctly itself, something a
+fixed policy should decide, or something that should never have been liftable.
+
+Consequences a builder must honour:
+
+- **Every refusal is terminal.** No id, no TTL, no ledger, no signing key, no disclosure.
+- **The block message carries the way forward.** `guard.sh`'s `g_alternative` and
+  `scope-guard.sh`'s `s_alternative` map every rule id to what to do instead, and both expose it as
+  `--explain <rule-id>`. A rule with no entry is a control-layer defect; `test_hooks.py` asserts it.
+- **Adding a rule means adding its alternative in the same change.** A wall with no door beside it
+  is how an unattended run dies.
+- **Policy, not permission, resolves the grey cases.** Repo-local `git config user.name/user.email`
+  is allowed (a clone with no identity cannot commit at all); everything else about repo config is
+  refused.
+
+### 5.6 The permanently-refused core (harness-fixed)
+
 secrets/keys/`.env` · force push · push or commit to `BASE_BRANCH` outside the ship flow ·
 the governing corpus (`GOVERNING_CORPUS`) · the control set:
-`settings.json guard.sh scope-guard.sh hooklib.sh escalation-lib.sh approve.sh ratchet.config.sh`
+`settings.json guard.sh scope-guard.sh hooklib.sh ratchet.config.sh`
 
-**Plus the harness's own state stores**, which are the control set seen from the other side — an
-approval means nothing if the agent can edit the thing the approval is written into, or the thing
-that defines the approval's own scope: `escalation-store-write` and `escalation-state-write`
-(`$ESCALATIONS_DIR` — the ledger and the approval records), `dispatch-store-write` (`$DISPATCH_DIR`
-— the partition globs the scope check reads and the baselines the gates attribute with), and
-`approve-script-invocation` (invoking a control-set file *is* a control-set operation).
+**Plus the harness's own state stores**, which are the control set seen from the other side: a lane
+means nothing if the agent can widen it. `dispatch-store-write` covers `$DISPATCH_DIR` — the
+partition globs the scope check reads and the baselines the post-hoc gates attribute work with.
 
-Nothing lifts any of these. Not an approval, not a card, not a domain pack. The canonical list is
-`ESC_NEVER_CORE` in `escalation-lib.sh`; this section and that variable change in the same commit.
+Since 2026-08-24 this is not a distinct class so much as a statement of emphasis: EVERY refusal is
+final. These are the ones denied at BOTH layers (settings deny *and* a guard rule), so that a
+single-layer mistake cannot open them.
 
 ### 5.7 Ship flow (two factors + a record)
 1. Affirmative selection on an `AskUserQuestion` Ship Prompt card.

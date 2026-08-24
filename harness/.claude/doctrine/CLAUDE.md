@@ -97,7 +97,7 @@ Those are yours. Decide them, log them, continue.
 
 ### These are NOT material — they are yours
 
-| Looks like an escalation | Is actually |
+| Looks like it needs a human | Is actually |
 |---|---|
 | An iteration cap exhausted | Re-plan, or a Decision Card only if the cap reveals something material. A cap is information, not a bell. |
 | A `clear-reviewer` BLOCK you cannot resolve within the 2-block cap | Decision Card — with "Escalate to {{ARBITER_LABEL}}" as an option |
@@ -151,7 +151,7 @@ check, or retry past a cap to get unblocked.
 |---|---|
 | `gc-prune.sh start <milestone>` | Writes `.pipeline/run-active` (the milestone id) and `.pipeline/run-start` (epoch); zeroes `.pipeline/run-idle`. This ARMS the gates. |
 | `gc-prune.sh reopen` | Re-arms an archived run **without** resetting elapsed work. Use when resuming, never `start`. |
-| `gc-prune.sh archive <milestone>` | Archives the manifest and journal, clears `run-active` and `ready-to-ship`, expires every escalation approval, rotates the events log. |
+| `gc-prune.sh archive <milestone>` | Archives the manifest and journal, clears `run-active` and `ready-to-ship`, rotates the events log. |
 | `gc-prune.sh prune` | Scratch hygiene only. Never touches source, tests, contracts, evidence or `.agent-development/`. |
 
 **With no run active, every scope check and the Stop gate's definition-of-done checks are INERT.**
@@ -251,99 +251,49 @@ Then call the tool. The prose is context; **the selector is the question.**
 
 ---
 
-## Escalation — approve and continue
+## Refusals — every one is final
 
-A refusal is not always the end of the road. Some refusals are a **question a human can answer in
-session**, and answering one costs a card instead of a run.
+There is no approval channel. Until 2026-08-24 a blocked call could be unlocked by a human signing
+it with an HMAC; that machinery is gone, and with it the idea that a wall has a door you can knock
+on. **A refusal means: this call will never work. Do something else.**
 
-### The one thing to understand before using it
+That is a stronger claim than it sounds, and it is the reason the channel went. All fifteen rules
+it could unlock were audited and none of them needed a human. Each was one of:
 
-**Refusals come in two classes and the guard tells you which.** If the message says
-*"This refusal is ESCALATABLE (id=<id>)"*, it carries an id. If it does not, no approval exists that
-lifts it — not the human's, not one signed by mistake — and the right move is the Hard Stop flow or a
-different approach. Do not file a request for a never-escalatable rule; `escalate.sh` will refuse it,
-and so will `approve.sh`, and so will the guard.
+- **something you can do correctly yourself** — name the push target, split the compound command,
+  amend the manifest with a DEC id;
+- **something a fixed policy should just decide** — repo-local `git config user.email` is fine,
+  changing the remote is not;
+- **something that should never have been unlockable** — the control set, the corpus, secrets.
 
-The harness ships two modes, set by `ESCALATION_MODE` in `ratchet.config.sh`. **light** (default) has
-a broad confirmable class and a small never class; **strict** shrinks the confirmable class and moves
-more rules to never. The mechanics are identical in both.
+A channel that pauses an autonomous run to ask permission for a decision no human was adding
+judgment to is not a safety feature. It is a stall with a ceremony attached.
 
-### The flow
+### What a refusal gives you instead
 
-1. The refusal records the **exact bytes** it refused, under an id. Nothing is retyped — the human
-   reviews what was actually refused, not your account of it.
-2. `.claude/hooks/escalate.sh request <id> "<why this specific call>"`
-3. **Raise a Decision Card.** This is an ordinary material-impact card, not a new channel: Situation /
-   Why this reached you / Blast radius, then the selector. Your recommendation first, a real
-   alternative, `Escalate to {{ARBITER_LABEL}}` offered. In the approving option's description, tell
-   the human to run `.claude/hooks/approve.sh <id>` in their own terminal.
-4. On an affirmative answer, **re-issue the identical call.** The guard re-hashes it, finds the
-   approval, consumes it, and permits exactly that one call.
+Every block names its rule and prints **`Do this instead:`** with the way forward. If you want it
+without triggering the block again:
 
-No restart. No widened standing rule. No weakened check.
+```sh
+.claude/hooks/guard.sh --explain <rule-id>
+.claude/hooks/scope-guard.sh --explain <rule-id>
+```
 
-### What binds an approval — and why you cannot shortcut any of it
-
-- **Byte-exact.** The MAC covers `version|id|rule|tool|target_sha|run_token|expiry`. The approval
-  names a sha256, never a command class. One space different is a different command and will be
-  refused, correctly. For a write it is the sha256 of the *resulting file*, so prefer `Write` with the
-  complete content — an `Edit` whose `old_string` appears more than once has no single derivable
-  result and cannot be approved at all.
-- **Single-use**, recorded in an append-only ledger at `.pipeline/escalations/ledger.jsonl`. Needing
-  it twice means asking twice.
-- **TTL `ESCALATION_TTL_SECONDS`** (default 1800s), and **bound to this run** — every approval dies at
-  `gc-prune.sh archive`.
-- **You cannot produce one.** It is an HMAC over a key at `secrets/escalation.key`, which you are
-  denied from reading at both layers, and that deny is itself never-escalatable. `approve.sh` is
-  denied to you at three layers and refuses to run without a TTY. This is the Ship Prompt's two-factor
-  doctrine exactly: the card selection is consent, the MAC is the factor you cannot produce, and
-  neither substitutes for the other.
-- **An approved rule does not skip the other rules.** Lifting a delete-scope refusal does not lift the
-  secrets refusal.
-- **A `.claude/` write must leave the control layer green.** The hook suite runs after it, and the
-  next tool call is refused until it passes. An approved edit that breaks the guards is the one state
-  where no refusal afterwards can be trusted.
-
-### Never-escalatable — the class that stays a wall
-
-Secrets, keys and `.env` · force push · pushing or committing `{{BASE_BRANCH}}` outside the ship flow ·
-the governing corpus (`SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, this file) · the
-control set (`settings.json`, `guard.sh`, `scope-guard.sh`, `hooklib.sh`, `escalation-lib.sh`,
-`approve.sh`, `ratchet.config.sh`) · and everything the domain pack lists in
-`DOMAIN_NEVER_ESCALATABLE`.
-
-These stay denied at **both** layers deliberately. Making them approvable would convert Tier 2b into
-"Tier 2b unless someone clicks yes", and the control layer's own control files must never be
-changeable through a mechanism they implement.
-
-### When a check is red and a human has ruled it ships anyway
-
-`approve.sh --disclose <check-id>`. Same key, same run binding, same terminal, and the human retypes
-the check id — a disclosure is an approval in every mechanical respect. What differs is what it
-authorises: **never "this check passes", only "a human read this exact failure and ruled the run may
-ship with it disclosed."**
-
-- `check_done.py` renders it **DISCLOSED**, never PASS, and excludes it from the exit code only.
-- The Stop gate **reprints every disclosed red in full at every block.** Nothing is hidden; the run
-  simply stops re-litigating it.
-- It binds to the **failure text**, not the check id. A different failure of the same check is
-  undisclosed and blocks.
-- It dies at gate closure.
-
-**You never ask for a disclosure to get unblocked.** You ask when the red is genuinely settled. Every
-other verdict in this harness has a home on disk — a finding has a disposition column, a checkpoint a
-verdict file, a merge a consent record — and without this one the gate is *structurally required* to
-re-derive a settled ruling every turn.
+If a rule ever refuses with no alternative, that is a **defect in the control layer**, not a puzzle
+for you to solve — file it in `.agent-development/proposals/` and raise it at the next Decision
+Card. `test_hooks.py` asserts every rule has one, so this should not happen.
 
 ### Two rules of use
 
-- **Escalation is a pressure valve, not a fix for a bad rule.** Asking twice for the same rule id is
-  evidence the rule is miscalibrated. Say so in the retro — a rule escalated in two consecutive runs
-  is a refinement row, not a third request.
-- **Never proceed on silence.** No human, no approval, no exception. Unattended, the behaviour is
-  exactly what it was before this existed: the refusal stands.
+1. **A refusal is information, not an obstacle to route around.** Do not retry the same call, do not
+   look for a spelling that slips past, do not reach for an inline interpreter to do by hand what
+   the gate just declined. Every one of those is the behaviour the gate exists to catch, and doing
+   it deliberately is worse than the thing that was blocked.
+2. **If you are blocked twice on the same intent, stop and raise a Decision Card.** Not because the
+   wall might move — it will not — but because being blocked twice on one intent means the plan and
+   the walls disagree, and that is a question worth a human's judgment. State what you were trying
+   to achieve, not which command you wanted to run.
 
----
 
 ## The Ship Prompt — the merge, and the one thing that MUST be asked
 
@@ -771,8 +721,8 @@ zero unresolved CRITICALs, HIGH acceptances documented, ledger complete, final c
   reaches it through the PR, never around it); force pushes; reading or writing secrets, `.env` or
   keys; the governing corpus (`SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, this
   file); the control layer's own files (`settings.json`, `guard.sh`, `scope-guard.sh`, `hooklib.sh`,
-  `escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`); and everything the domain pack declares in
-  `FORBIDDEN_EXEC_TOKENS`, `FORBIDDEN_ARTIFACTS` and `DOMAIN_NEVER_ESCALATABLE`.
+  `ratchet.config.sh`); and everything the domain pack declares in `FORBIDDEN_EXEC_TOKENS` and
+  `FORBIDDEN_ARTIFACTS`.
 
   The last line is the boundary that makes the approvable class safe to have: **the files that decide
   what an approval means cannot themselves be changed by one.**
@@ -901,7 +851,6 @@ stands`, `What's next`, `Issues you should know about`, `How close to launch` �
 - the secret scan clean and recorded fixtures scrubbed;
 - zero unresolved CRITICALs; HIGH acceptances documented; `findings.md` complete and reconciled;
 - the narrative budget green — no decision told twice, no probe transcript in a ledger cell;
-- every escalation audited against the never-escalatable table, and no control-layer postcondition pending;
 - every mandatory checkpoint CLEAR and every fast checkpoint logged;
 - `context-live.md`, `run-journal.md` and `DECISIONS.md` current;
 - **the retrospective written**, and `.pipeline/recap.md` written;
@@ -924,10 +873,8 @@ Gate M<n> closes on merge; the merge commit is the gate marker. Then `gc-prune.s
 - Never modify `.env*`, this file, `SPEC.md`, `MILESTONES.md`, `PIPELINE.md`, `TEMPLATE.md`, or the
   control layer's own files. The rest of `.claude/**` is refused by default and changeable only
   through an approved, byte-exact write — never silently.
-- **Never run `approve.sh`, and never route around a refusal that says it is not escalatable.** You
+- **Never route around a refusal.** Every refusal is final; there is no approval to seek. You
   cannot approve your own request; that is the property that makes the request worth anything.
-- Never file an escalation request for a rule the guard did not mark ESCALATABLE, and never ask a
-  third time for a rule you have already had approved twice — that is a refinement, not a request.
 - Never delete, skip, or weaken a failing test or assertion (quarantine only with a DECISIONS entry
   and a tracked issue).
 - Never use `--no-verify`, `git config`, `git remote`, or force flags.

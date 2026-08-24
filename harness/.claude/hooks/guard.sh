@@ -19,9 +19,9 @@
 #    touch". One view cannot answer both without either blocking commit messages or missing
 #    redirects.
 #
-# Every refusal names a stable kebab-case RULE ID. The ids are the vocabulary the escalation
-# classifier and the self-test share: `guard.sh --list-rules` prints all of them, so a rule that
-# nobody classified is mechanically detectable.
+# Every refusal names a stable kebab-case RULE ID. `guard.sh --list-rules` prints all of them and
+# the selftest asserts every id it can emit appears there, so a rule nobody declared is
+# mechanically detectable.
 #
 # Standalone: `guard.sh --list-rules`, `guard.sh --selftest`.
 # ------------------------------------------------------------------------------------------------
@@ -36,7 +36,6 @@ _g_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
 # selftest asserts every g_refuse id appears here).
 rt_rule_ids() {
   cat <<'EOF'
-approve-script-invocation
 banned-read-files
 base-branch-commit
 base-branch-push
@@ -45,7 +44,6 @@ compound-git-form
 control-set-write
 delete-scope
 dispatch-store-write
-escalation-store-write
 forbidden-artifacts
 forbidden-exec-tokens
 force-push
@@ -67,72 +65,75 @@ case "${1:-}" in
   --list-rules) rt_rule_ids; exit 0 ;;
 esac
 
-# ------------------------------------------------------------------------------ escalation binding
-# escalation-lib.sh is owned by another builder. If it is absent we FAIL CLOSED: every rule is
-# treated as never-escalatable, so a missing library can only ever make the guard stricter.
-# LOADED LAZILY, and the laziness is load-bearing for speed rather than tidiness.
-# escalation-lib.sh is ~1,780 lines - more than half of all the shell this hook would otherwise
-# source - and NOTHING outside g_refuse ever calls into it. This hook runs on EVERY tool call and
-# the overwhelming majority of those are ALLOWED, so sourcing it up front spent ~12ms of every
-# ~72ms firing (17%) on machinery the allow path never touches. Under Git-Bash, where process and
-# file I/O are emulated, that same fraction is roughly ten times the wall clock.
-# FAIL-CLOSED IS UNCHANGED: if the library cannot be loaded at the moment a refusal needs it, every
-# rule is treated as never-escalatable exactly as before. The question is asked when the answer is
-# needed instead of on every firing; it is not asked less strictly.
-G_ESC=""     # "" = not yet resolved · 0 = unusable, fail closed · 1 = ready
-g_esc_ready() {
-  [ -n "$G_ESC" ] && { [ "$G_ESC" = "1" ]; return; }
-  G_ESC=0
-  if [ -f "$HOOKS_DIR/escalation-lib.sh" ]; then
-    # shellcheck disable=SC1090,SC1091
-    . "$HOOKS_DIR/escalation-lib.sh" 2>/dev/null && G_ESC=1
-  fi
-  if [ "$G_ESC" = "1" ]; then
-    declare -F esc_is_never_escalatable >/dev/null 2>&1 || G_ESC=0
-    declare -F esc_check_approval       >/dev/null 2>&1 || G_ESC=0
-    declare -F esc_record_refusal       >/dev/null 2>&1 || G_ESC=0
-  fi
-  [ "$G_ESC" = "1" ]
-}
+# ------------------------------------------------------------------------------------ no escalation
+# NO ESCALATION CHANNEL. Removed 2026-08-24 (decisions doc ruling 3).
+# Every refusal below is FINAL. There is no approval, no signing key, no ledger.
+#
+# The channel existed so a human could unlock one exact blocked call. All 15
+# rules it could unlock were audited, and none of them needed a human: they
+# were either something the agent can do correctly itself (name the push
+# target, split the compound command, amend the manifest), something a fixed
+# policy should just decide (git config identity is fine, changing the remote
+# is not), or something that should never have been unlockable at all. A
+# channel that pauses an autonomous run to ask permission for a decision no
+# human was adding judgment to is not a safety feature, it is a stall.
+#
+# The cost of a final refusal is that the block message must carry the way
+# forward -- a wall with no door beside it is how an autonomous run dies. That
+# is what g_alternative is for, and every rule that a human used to unlock has
+# an entry there.
 
 CMD=""
 TOOL=""
 
-# g_refuse <rule-id> <headline> [detail...]
-# Checks for a live approval first (that is the "re-issue the identical call" path), then blocks.
+# g_alternative <rule-id> - the way forward, printed with every refusal.
+# This is the half of the deleted escalation channel that was actually load
+# bearing: not the approval, but telling the agent what to do instead.
+g_alternative() {
+  case "${1:-}" in
+    push-target-unprovable)  printf 'Name the target: git push -u origin <your-branch>.' ;;
+    compound-git-form)       printf 'One command per tool call. Issue them separately.' ;;
+    inline-interpreter)      printf 'Write a script file and run that. A file passes through the write gate; an inline -c string cannot be read by it.' ;;
+    delete-scope)            printf 'Deletes are unrestricted under .pipeline/. Elsewhere, leave the file in place and say so in your report.' ;;
+    git-config-write)        printf 'git config --local user.name / user.email are allowed. Nothing else about repository config is yours to change.' ;;
+    git-remote-write)        printf 'Where work goes is not the agent\047s to change. Raise it for the human.' ;;
+    gh-verb-off-surface)     printf 'Read-only gh verbs are allowed. A writing verb needs a human at the keyboard.' ;;
+    claude-dir-write)        printf 'The control layer is Tier 2b. File the change in .agent-development/proposals/ instead.' ;;
+    no-verify-flag)          printf 'Make the hook pass rather than skipping it. That is the whole point of the hook.' ;;
+    secrets-access)          printf 'Credentials come from the environment. Read the variable, never the file.' ;;
+    governing-corpus-write)  printf 'Those documents are the human\047s. Propose the change in DECISIONS.md.' ;;
+    control-set-write|dispatch-store-write)
+                             printf 'This file decides what you are allowed to do. Nothing you can do changes it.' ;;
+    base-branch-push|base-branch-commit)
+                             printf 'Work reaches the base branch through the PR, never around it.' ;;
+    force-push)              printf 'Recover the branch instead. History other work is based on is not rewritable.' ;;
+    banned-read-files)       printf 'That file is quarantined as context poison. Work from the live contracts instead.' ;;
+    ship-consent-missing|ship-consent-unparsable)
+                             printf 'Ask the Ship Prompt, write .pipeline/ship-consent.json on an affirmative answer, then re-issue the merge. The human approves the tool prompt; you cannot produce that half.' ;;
+    forbidden-exec-tokens|forbidden-artifacts)
+                             printf 'This is the irreversible action the domain pack exists to wall off. It has no safe form.' ;;
+    *) printf '' ;;
+  esac
+}
+
+# --explain <rule-id> - print what to do instead, and exit. Every refusal is
+# final, so this table IS the way forward; a human debugging a blocked run
+# should be able to read it without grepping the source.
+case "${1:-}" in
+  --explain) g_alternative "${2:-}"; printf '\n'; exit 0 ;;
+esac
+
+# g_refuse <rule-id> <headline> [detail...] - block, finally, with the way forward attached.
 g_refuse() {
   local rule="$1" head="$2"; shift 2
-  local sha="" esc_id never=1 d msg
+  local sha="" d msg alt
   sha=$(rt_sha256_str "$CMD" 2>/dev/null) || sha=""
-
-  if g_esc_ready && ! esc_is_never_escalatable "$rule" 2>/dev/null; then
-    never=0
-    # No digest tool means no way to bind an approval to these exact bytes -> no approval exists.
-    if [ -n "$sha" ] && esc_check_approval "$rule" "Bash" "$sha" 2>/dev/null; then
-      rt_log_cmd "Bash" "ALLOW-APPROVED" "$rule" "$sha" "$CMD"
-      rt_event guard_allow_approved "rule=$rule" "tool=Bash"
-      printf 'ratchet: a human approval for these exact bytes was found and consumed (rule=%s).\n' "$rule" >&2
-      exit 0
-    fi
-  fi
 
   msg="RATCHET BLOCK [rule=$rule]"$'\n'"$head"
   for d in "$@"; do msg="$msg"$'\n'"  $d"; done
-
-  if [ "$never" = "0" ]; then
-    esc_id=$(esc_record_refusal "$rule" "Bash" "$CMD" 2>/dev/null | tr -d '\r\n')
-    [ -n "$esc_id" ] || esc_id="$rule"
-    msg="$msg"$'\n\n'"This refusal is ESCALATABLE (id=$esc_id)"
-    msg="$msg"$'\n'"  $HOOKS_DIR/escalate.sh request $esc_id \"why this exact call is needed\""
-    msg="$msg"$'\n'"  Then raise a Decision Card. A human runs approve.sh $esc_id in their own"
-    msg="$msg"$'\n'"  terminal; re-issue the IDENTICAL call and it is permitted exactly once."
-  else
-    msg="$msg"$'\n\n'"This refusal is NOT escalatable. No approval, card or domain pack lifts it."
-    if [ "$G_ESC" = "0" ]; then
-      msg="$msg"$'\n'"  (escalation-lib.sh unavailable - every rule is treated as never-escalatable.)"
-    fi
-    msg="$msg"$'\n'"  Take a different approach, or run the Hard Stop flow."
-  fi
+  msg="$msg"$'\n\n'"This refusal is FINAL. No approval, card or domain pack lifts it."
+  alt="$(g_alternative "$rule")"
+  [ -n "$alt" ] && msg="$msg"$'\n'"  Do this instead: $alt"
 
   rt_log_cmd "Bash" "BLOCK" "$rule" "$sha" "$CMD"
   rt_event guard_block "rule=$rule" "tool=Bash"
@@ -355,10 +356,10 @@ g_check_all() {
     [ -n "$t" ] || continue
     rt_repo_rel_var "$t"
     case "$RT_REL/" in
-      "$ESCALATIONS_DIR"/*|"$SECRETS_DIR"/*)
-        g_refuse escalation-store-write \
+      "$SECRETS_DIR"/*)
+        g_refuse secrets-access \
           "The command would write the escalation store: $RT_REL" \
-          "An agent that can edit the ledger can approve itself. escalate.sh and approve.sh are" \
+          "The dispatch store defines this agent's own write lane." \
           "the only writers." ;;
     esac
   done <<< "$G_WRITES"
@@ -395,33 +396,6 @@ g_check_all() {
           "sha256 of the RESULTING FILE, which a redirect or sed -i does not let anyone predict." ;;
     esac
   done <<< "$G_WRITES"
-
-  # -- 4. the human-only approver -----------------------------------------------------------------
-  # Detect approve.sh by EFFECT, not by a literal substring. A case variant
-  # (Approve.sh on the case-insensitive mount) or a glob the shell expands to it
-  # (appr*.sh, approv[e].sh) reaches the same human-only script. The literal
-  # substring check is case-folded; then each token whose basename still carries
-  # the `appr` stem is glob-matched against the real name `approve.sh`, so a
-  # wildcard that COULD expand to it is refused while unrelated files
-  # (apprentice.sh, approve-notes.sh) and bare wildcards (*.sh) are not.
-  g_invokes_approve() {
-    case "$G_TARGET_LC" in *approve.sh*) return 0 ;; esac
-    local t b
-    while IFS= read -r t; do
-      [ -n "$t" ] || continue
-      b=$(rt_lc "${t##*/}")
-      case "$b" in *appr*) ;; *) continue ;; esac
-      # shellcheck disable=SC2254
-      case "approve.sh" in $b) return 0 ;; esac
-    done <<< "$G_TOK"
-    return 1
-  }
-  if g_invokes_approve; then
-    g_refuse approve-script-invocation \
-      "approve.sh is human-only and is denied to agents at every layer." \
-      "You cannot approve your own request - that is the property that makes a request worth" \
-      "anything. Ask for it on a Decision Card and let a human run it in their own terminal."
-  fi
 
   # -- 5. git / forge -----------------------------------------------------------------------------
   if g_has_word git || g_has_word gh; then
@@ -539,7 +513,14 @@ g_check_all() {
       if g_has_word git; then
         wr=1
         while IFS= read -r t; do
-          case "$t" in --get*|--list|-l|--show-origin) wr=0; break ;; esac
+          case "$t" in
+            --get*|--list|-l|--show-origin) wr=0; break ;;
+            # IDENTITY IS NOT A WALL. A fresh clone with no user.email cannot commit at all, so an
+            # agent that cannot set it is an agent that cannot do its job -- and this used to be the
+            # single most likely reason an unattended run died on its first commit. Repo-local
+            # identity changes nothing about where work goes, which is what this rule protects.
+            user.name|user.email) wr=0; break ;;
+          esac
         done <<< "$G_TOKENS"
         [ "$wr" = "1" ] && g_refuse git-config-write \
           "git config write detected." \
@@ -692,15 +673,15 @@ if [ "${1:-}" = "--selftest" ]; then
   _run inline-interpreter      "inline interpreter"       'python -c "print(1)"'
   _run delete-scope            "delete outside scratch"   'rm -rf docs/evidence'
   _run no-verify-flag          "no-verify"                'git commit --no-verify -m x'
-  _run git-config-write        "git config write"         'git config user.email a@b.c'
+  _run git-config-write        "git config write"         'git config push.default matching'
+  _run ALLOW                   "git identity is allowed"  'git config user.email a@b.c'
+  _run ALLOW                   "git identity, --local"    'git config --local user.name Bot'
   _run git-remote-write        "git remote write"         'git remote set-url origin http://x'
-  _run approve-script-invocation "approve.sh invocation"  '.claude/hooks/approve.sh abc'
   _run unparsable-command      "unterminated quote"       'echo "oops'
   _run delete-scope            "git clean"                'git clean -fd'
   # the two-view parser: prose in a message is not a target, a quoted path still is
   _run ALLOW                   "corpus named in a message" 'git tag -m "regenerate .context/SPEC.md" v1'
   _run secrets-access          "quoted secret is a target" 'cat "secrets/api.key"'
-  _run escalation-store-write  "escalation ledger write"  'echo x >> .pipeline/escalations/ledger.jsonl'
   # the dispatch store, by every write shape that reaches $G_WRITES
   _run dispatch-store-write    "glob widened by redirect" 'echo "**" > .pipeline/dispatch/p1.glob'
   _run dispatch-store-write    "baseline forged by tee"   'echo x | tee .pipeline/dispatch/p1.baseline'

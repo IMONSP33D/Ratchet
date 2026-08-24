@@ -67,7 +67,7 @@ GOVERNING_CORPUS="${GOVERNING_CORPUS:-.claude/doctrine/CLAUDE.md
 .context/MILESTONES.md}"
 
 # --- SECRET_PATTERNS -------------------------------------------------------------------------------
-# Secrets are refused on READ as well as write, in Bash and in Edit/Write. Never-escalatable.
+# Secrets are refused on READ as well as write, in Bash and in Edit/Write. Final.
 # Rule id emitted: secrets-access
 SECRET_PATTERNS="${SECRET_PATTERNS:-.env
 .env.*
@@ -82,12 +82,6 @@ id_rsa*}"
 # Keep this list short: every entry is a hole in the secrets wall.
 SECRET_EXEMPTIONS="${SECRET_EXEMPTIONS:-.env.example
 .env.sample}"
-
-# --- DOMAIN_NEVER_ESCALATABLE ----------------------------------------------------------------------
-# Extra RULE IDS (not paths) that can never be lifted by an approval, on top of the harness-fixed
-# core in CONTRACT SS5.6. Use rule ids exactly as guard.sh/scope-guard.sh emit them; both scripts
-# print their full id list with `--list-rules`, so a typo here is mechanically detectable.
-DOMAIN_NEVER_ESCALATABLE="${DOMAIN_NEVER_ESCALATABLE:-}"
 
 # --- DOMAIN_LAWS -----------------------------------------------------------------------------------
 # Markdown injected verbatim as laws 3-6 into every agent definition (laws 1, 2 and 7 are
@@ -150,9 +144,6 @@ ARBITER_LABEL="${ARBITER_LABEL:-Escalate to a higher-tier model}"
 # .env.sample"
 #
 # # Two extra ids the domain refuses to ever let an approval lift.
-# DOMAIN_NEVER_ESCALATABLE="forbidden-exec-tokens
-# forbidden-artifacts"
-#
 # DOMAIN_LAWS='3. **Sandbox only. The production charge path is unreachable by agents.** All work
 #    targets the sandbox gateway. The production triple-gate is Tier 2b: nothing can authorize an
 #    agent to create or satisfy it.
@@ -179,7 +170,7 @@ ARBITER_LABEL="${ARBITER_LABEL:-Escalate to a higher-tier model}"
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ] && [ "${1:-}" = "--selftest" ]; then
   printf 'domain.config.sh selftest\n  DOMAIN_NAME=%s\n' "$DOMAIN_NAME"
   for _v in FORBIDDEN_EXEC_TOKENS FORBIDDEN_ARTIFACTS BANNED_READ_FILES GOVERNING_CORPUS \
-            SECRET_PATTERNS SECRET_EXEMPTIONS DOMAIN_NEVER_ESCALATABLE \
+            SECRET_PATTERNS SECRET_EXEMPTIONS \
             DOMAIN_LAWS DOMAIN_REVIEW_LENS DOMAIN_SECURITY_PASS ARBITER_LABEL; do
     eval "_val=\${$_v-__UNSET__}"
     if [ "$_val" = "__UNSET__" ]; then

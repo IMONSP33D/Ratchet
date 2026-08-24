@@ -58,7 +58,7 @@ a production deploy, `npm publish`, `terraform apply`, sending real mail,
 deleting customer data. If yes, you give it two things: the **exec tokens** that
 must never appear in a command (`--prod`, `deploy:production`), and the
 **artifact filenames** that, by existing, would authorise it (`LIVE_CONFIRMED`).
-Both become never-escalatable walls — denied in `settings.json` *and* refused in
+Both become permanent walls — denied in `settings.json` *and* refused in
 the guard, two layers, and no approval lifts either.
 
 If the honest answer is no, say no. An empty domain pack is normal and you still
@@ -268,109 +268,25 @@ NO-GO.
 ### 1. The run stops on a refusal you think is wrong
 
 **What you see.** The agent stops and reports a refusal with a rule id, and
-possibly `This refusal is ESCALATABLE (id=esc-a1b2c3)`.
+and a line beginning `Do this instead:`.
 
-**What it means.** The guard refused a specific command. Two classes exist and
-the message tells you which.
+**Fix.** Read that line — it is the way forward, and it is the whole point. Every refusal is final:
+there is no approval to grant, no id to sign, nothing to unblock from your terminal. The agent is
+expected to take the alternative and continue.
 
-**Fix.** If it says ESCALATABLE, the agent has filed a request naming the exact
-bytes it tried. Read it, then in **your own terminal** (not the agent's):
-
-```bash
-.claude/hooks/approve.sh --list
-.claude/hooks/approve.sh esc-a1b2c3
-```
-
-You will be shown the exact command and made to retype the id. The agent then
-re-issues the identical call and it goes through — once, within about thirty
-minutes, bound to this run.
-
-If it does **not** say escalatable, no approval exists that lifts it, and
-`approve.sh` will refuse to sign one. That is the never-escalatable class:
-secrets, force push, base-branch writes outside the ship flow, the governing
-corpus, and the control layer's own files. The right move is a different
-approach, not a workaround.
-
-**The tell that the rule is wrong rather than the command:** you approve the
-same `rule_id` twice. That is a miscalibrated rule, and it belongs in the
-retrospective as a refinement — not as a third approval.
-
-### 2. The Stop gate blocks over and over on the same failure
-
-**What you see.** The agent tries to finish, gets blocked, tries again, gets
-blocked identically. Eventually it stops hard with a repeat-failure message.
-
-**What it means.** Working as designed. The Stop gate hashes the failure text
-plus the working diff and refuses a second attempt that changed nothing —
-because an agent retrying an unchanged failure is an agent burning your budget
-to no effect.
-
-**Fix, in order.** First, read the block: it names the failing check. Run it
-yourself —
+You can read any rule's guidance yourself without triggering the block:
 
 ```bash
-python3 .claude/hooks/check_done.py
+.claude/hooks/guard.sh --explain <rule-id>
+.claude/hooks/scope-guard.sh --explain <rule-id>
 ```
 
-Most first-run blocks are one of three things: a WIN row with no verify command
-(a setup defect — fix `MILESTONES.md`), `proof-map.md` not regenerated at HEAD
-(`python3 .claude/hooks/proof_map.py --milestone M0`), or a genuinely red test.
+If the refusal carries **no** `Do this instead:` line, that is a defect in the harness rather than a
+decision for you — the run has nowhere to go. Report it.
 
-If a check is red and you have decided it ships anyway, that is a **disclosure**,
-not a workaround:
-
-```bash
-.claude/hooks/approve.sh --disclose <check-id>
-```
-
-It renders **DISCLOSED**, never PASS, excludes the check from the exit code
-only, and reprints the failure in full at every subsequent block. Nothing is
-hidden; the run simply stops re-litigating a question you already answered.
-**Never ask for a disclosure just to get unblocked.** If you find yourself
-disclosing the same check twice, the check is wrong.
-
-### 3. `jq` is missing and nothing works
-
-**What you see.** Either the installer refuses with a FAIL line, or — if you
-installed jq later and it is not on the shell's path — every Bash tool call is
-blocked with a message about a JSON payload.
-
-**What it means.** Ratchet's hooks parse a JSON payload on stdin. Non-security
-fields degrade to a regex; **security decisions do not.** A guard that cannot
-parse its input cannot determine safety, and a guard that cannot determine
-safety blocks. That is fail-closed and it is not negotiable.
-
-**Fix.**
-
-```bash
-# Debian/Ubuntu
-sudo apt-get install -y jq
-# macOS
-brew install jq
-# Windows
-winget install jqlang.jq
-```
-
-Then confirm the **hooks'** shell can see it, which is not the same question as
-whether your shell can:
-
-```bash
-bash -lc "command -v jq"
-```
-
-On Windows, `winget` may install jq somewhere Git-Bash cannot see. The blunt fix
-that always works is to copy `jq.exe` into `C:\Program Files\Git\usr\bin`.
-
-**Windows bonus round.** If hooks fail with `bad interpreter: /usr/bin/env
-bash^M: no such file or directory` — an error that names a file which plainly
-exists — that is CRLF line endings on a shebang line. The installer writes LF
-and pins `.claude/hooks/**` to LF in `.gitattributes`, so this only happens if
-something re-checked-out the files with `core.autocrlf=true` before that landed:
-
-```bash
-git config core.autocrlf false
-git rm --cached -r .claude/hooks && git checkout .claude/hooks
-```
+If the agent is blocked twice on the same intent, the wall and the plan disagree. That is worth your
+attention: not to move the wall, but to decide whether the work was scoped to need something it
+should not have.
 
 ---
 

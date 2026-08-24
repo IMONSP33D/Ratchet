@@ -124,9 +124,9 @@ built around making that true per file instead.
 ## 3. The agent-driven path: why you cannot fix this yourself
 
 If you are an agent reading this mid-run because a gate is wrong: **you may not edit the control
-layer.** `.claude/**` is Tier 2b and never-escalatable (CONTRACT §5.6). Not with an approval, not
-with a Decision Card, not by putting it in the domain pack. `approve.sh` refuses those rule ids by
-construction.
+layer.** `.claude/**` is Tier 2b and every refusal on it is FINAL (CONTRACT §5.6). There is no
+approval channel to appeal to — it was removed 2026-08-24 precisely because a wall you can knock on
+is not a wall.
 
 This is not distrust dressed up as policy. It is the one structural property the harness has: an
 agent that can rewrite its own guardrails in response to being blocked by them has no guardrails.
@@ -206,7 +206,7 @@ If, having read that, you still must diverge:
 1. **Put the divergence in the domain pack, because that is the mechanism that exists.**
    `.claude/hooks/domain.config.sh` is USER-class: the updater preserves it and never overwrites it,
    and it is the one file under `.claude/` a human owns. Prefer *configuration* over *code* —
-   `DOMAIN_NEVER_ESCALATABLE`, `FORBIDDEN_EXEC_TOKENS`,
+   `FORBIDDEN_EXEC_TOKENS`,
    `BANNED_READ_FILES` and the rest of the pack exist precisely so most divergences never touch a
    harness file at all. **A divergence you can express as a domain pack value is not a fork**, and
    it survives every upgrade for free.
@@ -225,8 +225,8 @@ If, having read that, you still must diverge:
    upstream touches the same file, which is exactly when a merge is actually needed. That CONFLICT
    line, when it arrives, is the fork billing you: it is the mechanism that reliably gets forks
    retired instead of drifting unnoticed.
-4. **Never fork the never-escalatable control set to loosen it.** `guard.sh`, `scope-guard.sh`,
-   `hooklib.sh`, `escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`, `settings.json`. A local
+4. **Never fork the control set to loosen it.** `guard.sh`, `scope-guard.sh`, `hooklib.sh`,
+   `ratchet.config.sh`, `settings.json`. A local
    patch that makes one of these *stricter* is a defensible decision. A local patch that makes one of
    them *more permissive* has removed the property the whole harness exists to provide, and every
    gate downstream of it is now reporting on a system it no longer describes. If that is what you
@@ -242,11 +242,6 @@ Run this before starting any milestone on a freshly-updated harness.
       outright — "work around the scope guard's attribution bug" is worse than useless once the bug
       is fixed, and a stale lesson costs tokens in every dispatch for the rest of the project.
       Anything the update fixed gets closed with a `Supersedes:` line, not deleted.
-- [ ] **Diff `.claude/hooks/escalation-lib.sh`'s `ESC_NEVER_CORE`/`ESC_STRICT_NEVER` against the
-      previous version** (`git diff` against the pre-update commit — commit before you update, so this
-      is one command). Something that
-      used to be approvable with a human confirmation may now be a hard wall. A standing workflow that
-      depended on it needs redesigning, not approving.
 - [ ] **Diff `.claude/hooks/ratchet.config.sh`'s defaults the same way**, especially any this project
       overrides via `settings.json` `.env` or `domain.config.sh`. Nothing fails when a default moves
       under you; the number is just different now, which is the expensive kind of quiet.
@@ -255,14 +250,6 @@ Run this before starting any milestone on a freshly-updated harness.
       ```sh
       python3 .claude/hooks/test_hooks.py
       # then whatever VERIFY_CMD resolves to for this stack
-      ```
-- [ ] **Re-baseline the control-layer postcondition.** The update changed the suite, so the recorded
-      floor of "what this host already fails" is describing a different program. The updater does
-      this automatically **only from a green run** — a floor taken from a red suite records today's
-      breakage as normal, and the postcondition then passes while the control layer is broken. If the
-      suite was not green, fix it, then:
-      ```sh
-      .claude/hooks/approve.sh --postcondition-baseline
       ```
 - [ ] **Resolve every `<file>.ratchet-merge`.** It sits beside a file the updater left untouched
       because you had edited it AND upstream changed it too (§2.2, CONFLICT). Diff the two, merge by

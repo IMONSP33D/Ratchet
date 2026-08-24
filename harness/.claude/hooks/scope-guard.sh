@@ -38,7 +38,6 @@ banned-read-files
 claude-dir-write
 control-set-write
 dispatch-store-write
-escalation-store-write
 forbidden-artifacts
 governing-corpus-write
 manifest-scope-violation
@@ -52,25 +51,33 @@ case "${1:-}" in
   --list-rules) rt_rule_ids; exit 0 ;;
 esac
 
-# escalation binding - absent library means every rule is treated as never-escalatable (fail closed).
-# Loaded LAZILY: ~1,780 lines that only s_refuse ever calls, on a hook that fires for every Edit and
-# Write. See the same note in guard.sh. Fail-closed semantics are identical; the question is asked
-# when a refusal needs the answer instead of on every firing.
-S_ESC=""     # "" = not yet resolved · 0 = unusable, fail closed · 1 = ready
-s_esc_ready() {
-  [ -n "$S_ESC" ] && { [ "$S_ESC" = "1" ]; return; }
-  S_ESC=0
-  if [ -f "$HOOKS_DIR/escalation-lib.sh" ]; then
-    # shellcheck disable=SC1090,SC1091
-    . "$HOOKS_DIR/escalation-lib.sh" 2>/dev/null && S_ESC=1
-  fi
-  if [ "$S_ESC" = "1" ]; then
-    declare -F esc_is_never_escalatable >/dev/null 2>&1 || S_ESC=0
-    declare -F esc_check_approval       >/dev/null 2>&1 || S_ESC=0
-    declare -F esc_record_refusal       >/dev/null 2>&1 || S_ESC=0
-  fi
-  [ "$S_ESC" = "1" ]
+# ------------------------------------------------------------------------------------ no escalation
+# NO ESCALATION CHANNEL. Removed 2026-08-24 (decisions doc ruling 3). Every refusal below is FINAL.
+# See guard.sh for the reasoning; s_alternative carries the way forward, which is the half of the
+# deleted channel that was actually load bearing.
+
+# s_alternative <rule-id> - what to do instead, printed with every refusal.
+s_alternative() {
+  case "${1:-}" in
+    manifest-scope-violation) printf 'Amend the manifest: one line "<path> <DEC-id> <note>" in the amendments file, with the matching DECISIONS entry in the same commit. That is yours to do.' ;;
+    partition-glob-violation) printf 'That path belongs to another dispatch. Report the need; the orchestrator re-partitions rather than widening your lane.' ;;
+    claude-dir-write)         printf 'The control layer is Tier 2b. File the change in .agent-development/proposals/ instead.' ;;
+    governing-corpus-write)   printf 'Those documents are the human\047s. Propose the change in DECISIONS.md.' ;;
+    secrets-access)           printf 'Credentials come from the environment. Never write one into the tree.' ;;
+    control-set-write|dispatch-store-write)
+                              printf 'This file decides what you are allowed to do. Nothing you can do changes it.' ;;
+    forbidden-artifacts)      printf 'This file, by existing, authorises the irreversible action. It has no safe form.' ;;
+    banned-read-files)        printf 'That file is quarantined as context poison. Work from the live contracts.' ;;
+    *) printf '' ;;
+  esac
 }
+
+# --explain <rule-id> - print what to do instead, and exit. Every refusal is
+# final, so this table IS the way forward; a human debugging a blocked run
+# should be able to read it without grepping the source.
+case "${1:-}" in
+  --explain) s_alternative "${2:-}"; printf '\n'; exit 0 ;;
+esac
 
 S_TOOL=""
 S_PATH=""
@@ -88,40 +95,14 @@ s_target_sha() {
 
 s_refuse() {
   local rule="$1" head="$2"; shift 2
-  local sha="" esc_id never=1 d msg
+  local sha="" d msg alt
   sha=$(s_target_sha) || sha=""
-
-  if s_esc_ready && ! esc_is_never_escalatable "$rule" 2>/dev/null; then
-    never=0
-    if [ -n "$sha" ] && esc_check_approval "$rule" "$S_TOOL" "$sha" 2>/dev/null; then
-      rt_log_cmd "$S_TOOL" "ALLOW-APPROVED" "$rule" "$sha" "$S_REL"
-      rt_event scope_allow_approved "rule=$rule" "path=$S_REL"
-      printf 'ratchet: a human approval for this exact resulting file was found and consumed (rule=%s).\n' "$rule" >&2
-      exit 0
-    fi
-  fi
 
   msg="RATCHET BLOCK [rule=$rule]"$'\n'"$head"
   for d in "$@"; do msg="$msg"$'\n'"  $d"; done
-
-  if [ "$never" = "0" ]; then
-    esc_id=$(esc_record_refusal "$rule" "$S_TOOL" "$S_REL" "$sha" 2>/dev/null | tr -d '\r\n')
-    [ -n "$esc_id" ] || esc_id="$rule"
-    msg="$msg"$'\n\n'"This refusal is ESCALATABLE (id=$esc_id)"
-    msg="$msg"$'\n'"  $HOOKS_DIR/escalate.sh request $esc_id \"why this exact write is needed\""
-    msg="$msg"$'\n'"  Then raise a Decision Card. A human runs approve.sh $esc_id in their own"
-    msg="$msg"$'\n'"  terminal; re-issue the IDENTICAL write and it is permitted exactly once."
-    if [ "$S_HAS_CONTENT" != "1" ]; then
-      msg="$msg"$'\n'"  NOTE: an approval binds to the sha256 of the RESULTING FILE. This is an $S_TOOL,"
-      msg="$msg"$'\n'"  whose result is not derivable in advance - re-issue it as a Write carrying the"
-      msg="$msg"$'\n'"  complete file content, or it cannot be approved at all."
-    fi
-  else
-    msg="$msg"$'\n\n'"This refusal is NOT escalatable. No approval, card or domain pack lifts it."
-    if [ "$S_ESC" = "0" ]; then
-      msg="$msg"$'\n'"  (escalation-lib.sh unavailable - every rule is treated as never-escalatable.)"
-    fi
-  fi
+  msg="$msg"$'\n\n'"This refusal is FINAL. No approval, card or domain pack lifts it."
+  alt="$(s_alternative "$rule")"
+  [ -n "$alt" ] && msg="$msg"$'\n'"  Do this instead: $alt"
 
   rt_log_cmd "$S_TOOL" "BLOCK" "$rule" "$sha" "$S_REL"
   rt_event scope_block "rule=$rule" "path=$S_REL"
@@ -214,11 +195,10 @@ s_check_tier2b() {
   fi
 
   case "$S_REL/" in
-    "$ESCALATIONS_DIR"/*|"$SECRETS_DIR"/*)
-      s_refuse escalation-store-write \
+    "$SECRETS_DIR"/*)
+      s_refuse secrets-access \
         "This path is inside the escalation store: $S_REL" \
-        "An agent that can write the ledger can approve itself. escalate.sh and approve.sh are the" \
-        "only writers, and approve.sh is human-only." ;;
+        "The dispatch store defines this agent's own write lane; a lane it can widen is not a lane." ;;
   esac
 
   # The dispatch store must be checked HERE, in tier2b, because s_check_partition returns
@@ -347,7 +327,6 @@ if [ "${1:-}" = "--selftest" ]; then
   _run secrets-access         "dotenv write"            Write ".env" "TOKEN=1"
   _run ALLOW                  "dotenv example allowed"  Write ".env.example" "TOKEN="
   _run secrets-access         "key write"               Write "secrets/escalation.key" "x"
-  _run escalation-store-write "ledger write"            Write ".pipeline/escalations/ledger.jsonl" "{}"
   _run dispatch-store-write   "partition glob widened"  Write ".pipeline/dispatch/p1.glob" "**"
   _run dispatch-store-write   "attribution baseline"    Write ".pipeline/dispatch/p1.baseline" "x"
   _run dispatch-store-write   "dispatch pointer"        Write ".pipeline/dispatch/current" "p1"

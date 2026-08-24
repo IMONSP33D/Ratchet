@@ -57,7 +57,7 @@
 #     Scratch hygiene only: per-session gate counters, dispatch records that
 #     are not `current`, red-phase copies, and stray .tmp/.out files under
 #     $PIPELINE_DIR. It never touches RUN_*, findings, journal, checkpoints,
-#     escalations or anything under .agent-development (tracked, never pruned).
+#     anything under .agent-development (tracked, never pruned).
 # =============================================================================
 
 set -uo pipefail
@@ -81,10 +81,6 @@ _bootstrap() {
     . "$lib" || return 1
   fi
   command -v rt_repo_root >/dev/null 2>&1 && { rt_repo_root >/dev/null 2>&1 || true; }
-  if [ -r "$RT_SELF_DIR/escalation-lib.sh" ]; then
-    # shellcheck disable=SC1090,SC1091
-    . "$RT_SELF_DIR/escalation-lib.sh" >/dev/null 2>&1 || true
-  fi
   return 0
 }
 
@@ -133,29 +129,6 @@ _f_seen()     { printf '%s' "$(_abs "${RUN_LAST_SEEN:-.pipeline/run-last-seen}")
 _f_ready()    { printf '%s' "$(_abs "${READY_TO_SHIP:-.pipeline/ready-to-ship}")"; }
 _f_events()   { printf '%s' "$(_abs "${EVENTS_LOG:-.pipeline/run-events.jsonl}")"; }
 
-_expire_approvals() {
-  local dir n=0 f
-  if command -v esc_expire_all >/dev/null 2>&1; then
-    esc_expire_all >/dev/null 2>&1 && { printf 'escalation approvals expired via esc_expire_all\n'; return 0; }
-  fi
-  # Fallback: remove every unconsumed approval artifact and record the sweep in
-  # the ledger. Approvals are run-bound; nothing survives gate closure. If this
-  # cannot be done the caller is told, because a surviving approval is exactly
-  # the thing that must not outlive its run silently.
-  dir="$(_abs "${ESCALATIONS_DIR:-.pipeline/escalations}")"
-  if [ -d "$dir" ]; then
-    for f in "$dir"/approved/* "$dir"/*.approval "$dir"/*.approved "$dir"/disclosures/*; do
-      [ -e "$f" ] || continue
-      rm -f "$f" 2>/dev/null && n=$((n+1))
-    done
-  fi
-  local ledger; ledger="$(_abs "${ESCALATION_LEDGER:-.pipeline/escalations/ledger.jsonl}")"
-  mkdir -p "$(dirname "$ledger")" 2>/dev/null || true
-  printf '{"ts":"%s","event":"expire_all","reason":"gate closure","removed":%s,"by":"gc-prune.sh"}\n' \
-    "$(_now_iso)" "$n" >> "$ledger" 2>/dev/null || true
-  printf 'escalation approvals expired: %s artifact(s) removed, sweep recorded in %s\n' "$n" "$ledger"
-  return 0
-}
 
 # --- transitions ----------------------------------------------------------- #
 _start() {
@@ -230,7 +203,6 @@ _reopen() {
 
   printf 'gc-prune: run %s reopened from %s. Elapsed work preserved (start %s, idle %s incl. a %ss pause).\n' \
     "$ms" "$found" "$start" "$idle" "$gap"
-  printf 'gc-prune: escalation approvals were expired at archive and are NOT restored.\n'
   _event run_reopen "milestone=$ms" "start=$start" "idle=$idle" "pause=$gap" "from=$found"
   return 0
 }
@@ -280,33 +252,6 @@ _archive() {
     : > "$(_f_events)" 2>/dev/null || true
   fi
 
-  local esc_msg; esc_msg="$(_expire_approvals)"
-
-  # Refusal records ROTATE into the archive alongside the events log. A refusal
-  # record IS evidence -- what was refused, and what bytes an approval would have
-  # been bound to -- so it is moved, never deleted. But it is evidence OF THIS
-  # RUN, and a live directory that only ever grows is the artifacts-outlive-their-run
-  # lesson wearing a different hat: at ~30 unique refusals a run it reaches tens of
-  # thousands of 67-byte files, which is inode and listing cost for nothing.
-  # The LEDGER stays live and is never rotated: it is the single-use replay
-  # defence, and it is append-only by design.
-  local edir eledger emoved
-  edir="$(_abs "${ESCALATIONS_DIR:-.pipeline/escalations}")"
-  eledger="$(_abs "${ESCALATION_LEDGER:-.pipeline/escalations/ledger.jsonl}")"
-  if [ -d "$edir" ]; then
-    emoved=0
-    mkdir -p "$dest/escalations" 2>/dev/null || true
-    for f in "$edir"/*; do
-      [ -e "$f" ] || continue
-      [ "$f" = "$eledger" ] && continue
-      case "$(basename "$f")" in
-        ledger.jsonl|postcondition-*) continue ;;
-      esac
-      mv -f "$f" "$dest/escalations/" 2>/dev/null && emoved=$((emoved+1))
-    done
-    [ "$emoved" -gt 0 ] && esc_msg="$esc_msg; $emoved record(s) rotated to archive"
-    rmdir "$dest/escalations" 2>/dev/null || true
-  fi
 
   {
     printf 'milestone: %s\n' "$ms"
@@ -316,7 +261,6 @@ _archive() {
     printf 'branch: %s\n' "$branch"
     printf 'work_seconds: %s\n' "$work"
     printf 'wall_seconds: %s\n' "$wall"
-    printf 'escalations: %s\n' "$esc_msg"
   } > "$dest/ARCHIVE-INFO" 2>/dev/null || true
 
   # clear the run markers LAST: until this point a crash leaves the run active,
@@ -326,7 +270,6 @@ _archive() {
   rm -f "$p"/dispatch/current 2>/dev/null || true
 
   printf 'gc-prune: milestone %s archived to %s\n' "$ms" "$dest"
-  printf 'gc-prune: %s\n' "$esc_msg"
   printf 'gc-prune: run marker cleared - scope checks and the definition of done are now INERT.\n'
   _event run_archive "milestone=$ms" "dest=$dest" "head=$head" "work=$work" "wall=$wall"
   return 0
@@ -364,7 +307,7 @@ _prune() {
     done
   fi
 
-  printf 'gc-prune: pruned %s scratch file(s) under %s. Run markers, findings, journal, checkpoints and the escalation ledger untouched (refusal records rotate at archive, not here).\n' "$n" "$p"
+  printf 'gc-prune: pruned %s scratch file(s) under %s. Run markers, findings, journal and checkpoints untouched.\n' "$n" "$p"
   _event run_prune "removed=$n"
   return 0
 }
@@ -389,7 +332,7 @@ usage: gc-prune.sh start <milestone>   arm a run: run-active, run-start, run-idl
                                         resetting elapsed work
        gc-prune.sh archive <milestone>  archive manifest+journal, clear the run
                                         marker and ready-to-ship, expire every
-                                        escalation approval, rotate the events log
+                                        rotate the events log
        gc-prune.sh prune                scratch hygiene only
        gc-prune.sh --selftest
 

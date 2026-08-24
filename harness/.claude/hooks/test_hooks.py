@@ -88,14 +88,12 @@ DOCTRINE = CLAUDE / "doctrine"
 BLOCK = 2  # PreToolUse block exit code (CONTRACT 3)
 OK = 0
 
-# CONTRACT 5.6 - the control set. Never-escalatable, denied at both layers.
+# CONTRACT 5.6 - the control set. Denied at both layers; every refusal is final.
 CONTROL_SET = [
     ".claude/settings.json",
     ".claude/hooks/guard.sh",
     ".claude/hooks/scope-guard.sh",
     ".claude/hooks/hooklib.sh",
-    ".claude/hooks/escalation-lib.sh",
-    ".claude/hooks/approve.sh",
     ".claude/hooks/ratchet.config.sh",
 ]
 
@@ -132,9 +130,7 @@ EXPECTED_HOOKS = [
     "format.sh",
     "notify.sh",
     "pipeline-event.sh",
-    "escalation-lib.sh",
-    "escalate.sh",
-    "approve.sh",
+    "install-verify.sh",
     "check_done.py",
     "proof_map.py",
     "run_metrics.py",
@@ -574,128 +570,77 @@ class NoRepoCase(unittest.TestCase):
 # META-INVARIANTS
 # The checks that make extraction and upgrade safe. Nothing else looks at these.
 # --------------------------------------------------------------------------
-class TestEveryGuardRuleIdIsClassified(RepoCase):
-    """A refusal that carries a rule id promises the id means something.
+class TestEveryRefusalCarriesAWayForward(RepoCase):
+    """A wall with no door beside it is how an autonomous run dies.
 
-    Every id guard.sh or scope-guard.sh can print must be classified by
-    escalation-lib as never-escalatable or confirmable. An id in neither list
-    defaults to refusal, which is the safe direction - but silently, and a
-    future editor reads an unclassified id as an oversight either way. The
-    escalation flow's whole contract is 'the guard tells you which class you
-    hit'; an UNKNOWN id is that contract failing quietly.
+    Until 2026-08-24 a blocked agent had a second path: file an escalation, a
+    human signs it, retry. That channel is gone and every refusal is now FINAL,
+    which moves the whole burden onto the block message. If a rule fires and the
+    message does not say what to do instead, the run has nowhere to go -- and
+    that is strictly worse than the old stall, because it is silent.
+
+    So the invariant that replaced "every rule id is classified" is: every rule
+    id a guard can emit has an entry in that guard's alternative table.
     """
 
-    def rule_ids(self):
-        ids = set()
-        listed = False
-        for name in ("guard.sh", "scope-guard.sh"):
-            p = self.hooks_dir() / name
-            if not p.is_file():
+    def _ids(self, script):
+        p = self.hooks_dir() / script
+        if not p.is_file():
+            raise unittest.SkipTest("not built yet: %s" % script)
+        r = subprocess.run([BASH, str(p), "--list-rules"], capture_output=True,
+                           text=True, cwd=str(self.tmp), env=self.env, timeout=60)
+        return [x.strip() for x in (r.stdout or "").splitlines() if x.strip()]
+
+    def _alt(self, script, fn, rule):
+        """Via the script's own --explain, never by sourcing it: sourcing a
+        PreToolUse hook runs its payload read, which blocks on stdin forever."""
+        p = self.hooks_dir() / script
+        r = subprocess.run([BASH, str(p), "--explain", rule], capture_output=True,
+                           text=True, cwd=str(self.tmp), env=self.env, timeout=60)
+        return (r.stdout or "").strip()
+
+    def test_every_guard_rule_says_what_to_do_instead(self):
+        missing = []
+        for rule in self._ids("guard.sh"):
+            # the two payload/parse ids describe a malformed CALL, not a policy
+            # the agent could satisfy differently; they have no alternative.
+            if rule in ("unparsable-command", "unparsable-payload"):
                 continue
-            r = subprocess.run(
-                [BASH, str(p), "--list-rules"],
-                capture_output=True,
-                text=True,
-                cwd=str(self.tmp),
-                env=self.env,
-                timeout=60,
-            )
-            found = set()
-            if r.returncode == 0:
-                for ln in r.stdout.splitlines():
-                    tok = ln.strip().split()[0] if ln.strip() else ""
-                    if re.match(r"^[a-z][a-z0-9]*(-[a-z0-9]+)+$", tok):
-                        found.add(tok)
-            if found:
-                listed = True
-                ids |= found
-            else:
-                # Fallback: mine the source. Weaker, and it says so.
-                text = read(p)
-                ids |= set(re.findall(r'rt_block[^\n]*?\brule=([a-z][a-z0-9-]+)', text))
-                ids |= set(re.findall(r'^\s*RULE=["\']?([a-z][a-z0-9]*(?:-[a-z0-9]+)+)', text, re.M))
-                ids |= set(re.findall(r'\bid=([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b', text))
-        return ids, listed
-
-    def classify(self, rule):
-        """never | confirmable | UNKNOWN, via escalation-lib."""
-        script = (
-            'if command -v esc_classify >/dev/null 2>&1; then esc_classify %s; '
-            'elif command -v esc_never_escalatable >/dev/null 2>&1; then '
-            '  if esc_never_escalatable %s; then echo never; '
-            '  elif command -v esc_escalatable >/dev/null 2>&1 && esc_escalatable %s; then echo confirmable; '
-            '  else echo UNKNOWN; fi; '
-            'else '
-            '  if printf "%%s\\n" "${ESC_NEVER:-}" | grep -Fxq -- %s; then echo never; '
-            '  elif printf "%%s\\n" "${ESC_CONFIRMABLE:-}${ESC_ESCALATABLE:-}${ESC_ALLOWED:-}" '
-            '       | grep -Fxq -- %s; then echo confirmable; '
-            '  else echo UNKNOWN; fi; fi'
-        )
-        q = "'" + rule.replace("'", "'\\''") + "'"
-        r = self.sh(
-            script % (q, q, q, q, q),
-            libs=("ratchet.config.sh", "hooklib.sh", "escalation-lib.sh"),
-        )
-        out = r.stdout.strip().splitlines()
-        return (out[-1].strip().upper() if out else "UNKNOWN")
-
-    def test_every_rule_id_the_guard_can_print_is_classified(self):
-        need("guard.sh", "escalation-lib.sh")
-        ids, listed = self.rule_ids()
-        if not ids:
-            self.fail(
-                "no guard rule ids could be discovered. guard.sh must support "
-                "`--list-rules` (one id per line); mining the source found nothing "
-                "either, so no refusal in this build can be shown to carry a "
-                "classified id."
-            )
-        unknown = sorted(r for r in ids if self.classify(r) not in ("NEVER", "CONFIRMABLE"))
+            if not self._alt("guard.sh", "g_alternative", rule):
+                missing.append(rule)
         self.assertEqual(
-            unknown,
-            [],
-            "guard rule ids classified by escalation-lib as neither never nor "
-            "confirmable: %s. Every id must land in exactly one class - an "
-            "unclassified id refuses silently and reads as an oversight.%s"
-            % (unknown, "" if listed else " (ids were MINED from source; --list-rules is missing)"),
-        )
+            missing, [],
+            "these guard.sh rules can refuse a command and say nothing about what "
+            "would work instead. Every refusal is final now, so a rule with no "
+            "alternative is a dead end for an unattended run: %s" % missing)
 
-    def test_an_invented_rule_id_is_reported_UNKNOWN(self):
-        """The failing input for the test above. If a fabricated id classifies as
-        anything but UNKNOWN, the classifier answers yes to everything and the
-        test above proves nothing."""
-        need("escalation-lib.sh")
-        self.assertEqual(self.classify("obviously-not-a-real-rule-id"), "UNKNOWN")
-
-    def test_no_rule_id_is_in_both_classes(self):
-        """The classifier returns ONE class per id. The lists it reads from must
-        not overlap, or the answer depends on which list is consulted first."""
-        need("escalation-lib.sh")
-        r = self.sh(
-            'printf "%s\\n" "${ESC_NEVER_CORE:-}${ESC_NEVER:-}" > /tmp/rt-never.$$; '
-            'printf "%s\\n" "${ESC_CONFIRMABLE_BASE:-}${ESC_CONFIRMABLE:-}" > /tmp/rt-conf.$$; '
-            'sort -u /tmp/rt-never.$$ > /tmp/rt-n.$$; sort -u /tmp/rt-conf.$$ > /tmp/rt-c.$$; '
-            'comm -12 /tmp/rt-n.$$ /tmp/rt-c.$$; rm -f /tmp/rt-*.$$',
-            libs=("ratchet.config.sh", "hooklib.sh", "escalation-lib.sh"),
-        )
-        both = [x for x in r.stdout.split() if x]
+    def test_every_scope_rule_says_what_to_do_instead(self):
+        missing = []
+        for rule in self._ids("scope-guard.sh"):
+            if rule in ("unparsable-payload",):
+                continue
+            if not self._alt("scope-guard.sh", "s_alternative", rule):
+                missing.append(rule)
         self.assertEqual(
-            both, [], "rule ids in BOTH the never and confirmable lists: %s" % both
-        )
+            missing, [],
+            "these scope-guard.sh rules refuse a write with no way forward: %s" % missing)
 
-    def test_the_whole_declared_vocabulary_classifies(self):
-        """Every id the harness declares must classify. This is the list the
-        guards are allowed to draw from; an id outside it refuses silently."""
-        need("escalation-lib.sh")
-        r = self.sh(
-            'command -v esc_rule_vocabulary >/dev/null 2>&1 || exit 3; esc_rule_vocabulary',
-            libs=("ratchet.config.sh", "hooklib.sh", "escalation-lib.sh"),
-        )
-        if r.returncode == 3:
-            self.skipTest("escalation-lib exposes no esc_rule_vocabulary")
-        ids = [x for x in r.stdout.split() if x]
-        self.assertGreater(len(ids), 5, "the declared rule vocabulary is nearly empty")
-        bad = [i for i in ids if self.classify(i) not in ("NEVER", "CONFIRMABLE")]
-        self.assertEqual(bad, [], "declared but unclassified: %s" % bad)
+    def test_negative_an_unknown_rule_yields_no_invented_advice(self):
+        """The table must not fall through to a generic reassurance. Silence is
+        correct for an id nobody wrote guidance for; a plausible-sounding
+        default would hide exactly the gap the tests above exist to find."""
+        self.assertEqual(self._alt("guard.sh", "g_alternative", "totally-made-up-rule"), "")
+
+    def test_a_real_refusal_prints_the_alternative(self):
+        """End to end: the text actually reaches the agent, not just the table."""
+        need("guard.sh")
+        r = self.guard_run("git push")
+        self.assertEqual(r.returncode, BLOCK)
+        self.assertIn("Do this instead:", r.stderr,
+                      "the block message did not carry the way forward.\nstderr=%r" % r.stderr)
+        self.assertIn("FINAL", r.stderr,
+                      "the refusal must say it is final; a message that implies an "
+                      "approval might exist sends the agent looking for one.")
 
 
 class TestDenyPartitionIsConsistent(RepoCase):
@@ -741,13 +686,13 @@ class TestDenyPartitionIsConsistent(RepoCase):
                     "settings.json covers it - the second layer is missing" % f,
                 )
 
-    def test_every_control_file_is_never_escalatable(self):
+    def test_every_control_file_is_walled(self):
         """Behavioural, not list-shaped: drive a real write at each control file
         and check BOTH that it is refused AND that the rule the refusal names
         classifies as `never`. A refusal that names a confirmable rule for a
         control file would let a human approve the file that decides what an
         approval means."""
-        need("scope-guard.sh", "escalation-lib.sh")
+        need("scope-guard.sh")
         self.start_run()
         self.manifest("src/app.py")
         bad = []
@@ -756,15 +701,17 @@ class TestDenyPartitionIsConsistent(RepoCase):
             if r.returncode != BLOCK:
                 bad.append("%s: not refused at all" % rel)
                 continue
+            # Every refusal is final now, so the assertion is that the message
+            # says so and names its rule -- not that it lands in a "never" class
+            # that no longer has a "confirmable" counterpart to be distinct from.
             if "ESCALATABLE" in r.stderr:
-                bad.append("%s: refusal offers an escalation id" % rel)
+                bad.append("%s: refusal still offers an escalation id" % rel)
                 continue
-            rules = re.findall(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+", r.stderr)
-            named = [x for x in rules if self.classify(x) in ("NEVER", "CONFIRMABLE")]
-            if not named:
-                bad.append("%s: refusal names no classified rule id (%r)" % (rel, r.stderr[:120]))
-            elif not any(self.classify(x) == "NEVER" for x in named):
-                bad.append("%s: refused under confirmable rule(s) %s" % (rel, named))
+            if "FINAL" not in r.stderr:
+                bad.append("%s: refusal does not state that it is final (%r)"
+                           % (rel, r.stderr[:120]))
+            if not re.search(r"\[rule=[a-z][a-z0-9-]+\]", r.stderr):
+                bad.append("%s: refusal names no rule id (%r)" % (rel, r.stderr[:120]))
         self.assertEqual(
             bad,
             [],
@@ -774,34 +721,12 @@ class TestDenyPartitionIsConsistent(RepoCase):
     def test_a_non_control_file_is_NOT_walled(self):
         """The mismatched payload. If every path refuses under a never rule, the
         partition is 'refuse everything' and the test above proves nothing."""
-        need("scope-guard.sh", "escalation-lib.sh")
+        need("scope-guard.sh")
         self.start_run()
         self.manifest("src/app.py")
         r = self.scope_run(self.tmp / "src/app.py")
         self.assertNotEqual(
             r.returncode, BLOCK, "an in-manifest source write was refused: %r" % r.stderr
-        )
-
-    def test_the_classifier_distinguishes_never_from_confirmable(self):
-        need("escalation-lib.sh")
-        self.assertEqual(self.classify_one("force-push"), "NEVER")
-        self.assertEqual(self.classify_one("control-set-write"), "NEVER")
-        self.assertEqual(self.classify_one("delete-scope"), "CONFIRMABLE")
-        self.assertEqual(self.classify_one("obviously-not-a-real-rule-id"), "UNKNOWN")
-
-    def test_the_signer_and_the_escalation_store_are_denied(self):
-        blob = "\n".join(self.deny())
-        self.assertRegex(
-            blob,
-            r"approve\.sh",
-            "approve.sh must be denied to the agent in settings.json - it is the "
-            "one factor the agent must not be able to produce",
-        )
-        self.assertRegex(
-            blob,
-            r"escalations",
-            "the escalation store (.pipeline/escalations/**) must be write-denied; "
-            "an agent that can write the ledger can approve itself",
         )
 
     def test_secrets_are_denied_and_the_example_is_not(self):
@@ -1483,18 +1408,6 @@ class TestGuardRefusalsAreLegible(RepoCase):
                     "no rule id in: %r" % r.stderr,
                 )
 
-    def test_an_escalatable_refusal_announces_that_it_is_escalatable(self):
-        need("guard.sh", "escalation-lib.sh")
-        r = self.guard_run("git config user.name someone")
-        if r.returncode != BLOCK:
-            self.skipTest("git config is not refused in this build")
-        self.assertRegex(
-            r.stderr,
-            r"ESCALATABLE",
-            "a confirmable refusal must say so and carry an id, or the human has no "
-            "route: %r" % r.stderr,
-        )
-
     def test_a_never_escalatable_refusal_offers_no_id(self):
         """The mismatched payload. If every refusal says ESCALATABLE, the word
         carries no information and a human will try to lift a wall."""
@@ -1513,48 +1426,6 @@ class TestGuardRefusalsAreLegible(RepoCase):
             with self.subTest(cmd=cmd):
                 self.assertNotEqual(self.guard_run(cmd).returncode, BLOCK, cmd)
 
-
-class TestApproveScriptIsDeniedByEffect(RepoCase):
-    """approve.sh is human-only. A literal-substring, case-sensitive match let a
-    glob or a case variant that resolves to the SAME file slip past the guard --
-    stacking with the Windows case-fold gap, an agent could reach the human-only
-    approver. Detection is by effect now; these are the mismatched payloads."""
-
-    def test_glob_and_case_variants_that_resolve_to_approve_are_refused(self):
-        need("guard.sh")
-        for cmd in (
-            "bash .claude/hooks/approve.sh esc-0000000000000000",
-            "bash .claude/hooks/appr*.sh esc-0000000000000000",
-            "bash .claude/hooks/Approve.sh esc-0000000000000000",
-            "bash .claude/hooks/approv[e].sh esc-0000000000000000",
-        ):
-            with self.subTest(cmd=cmd):
-                r = self.guard_run(cmd)
-                self.assertEqual(r.returncode, BLOCK, "reached approve.sh: %s" % cmd)
-                self.assertIn("approve-script-invocation",
-                              r.stderr + r.stdout, cmd)
-
-    def test_unrelated_files_and_bare_wildcards_are_not_false_positives(self):
-        """The mismatched payload: if 'appr' or a wildcard is enough to refuse,
-        the rule blocks ordinary work. apprentice.sh and approve-notes.sh are
-        different files; *.sh / * do not target approve by name."""
-        need("guard.sh")
-        for cmd in (
-            "bash .claude/hooks/apprentice.sh run",
-            "ls docs/*.py",
-            "grep -r foo .",
-            "cat approve-notes.sh",
-        ):
-            with self.subTest(cmd=cmd):
-                r = self.guard_run(cmd)
-                self.assertNotIn(
-                    "approve-script-invocation", r.stderr + r.stdout,
-                    "false positive on %s" % cmd)
-
-
-# --------------------------------------------------------------------------
-# SCOPE GUARD
-# --------------------------------------------------------------------------
 class TestScopeGuardTier2b(RepoCase):
     """The Edit/Write surface. Same partition, different tool."""
 
@@ -2396,292 +2267,6 @@ class TestAttributionOnlyBlamesTheActor(GateCase):
 # --------------------------------------------------------------------------
 # ESCALATION
 # --------------------------------------------------------------------------
-class EscalationCase(GateCase):
-    """Drives the real refusal -> request -> approve -> retry loop.
-
-    Where a signing helper is not exposed under a name the contract fixes, the
-    test SKIPs naming the function it wanted rather than guessing at a private
-    interface.
-    """
-
-    LIBS = ("ratchet.config.sh", "hooklib.sh", "escalation-lib.sh")
-
-    def setUp(self):
-        GateCase.setUp(self)
-        self.start_run()
-        key = self.tmp / "secrets/escalation.key"
-        if not key.is_file():
-            write(key, "0123456789abcdef" * 4 + "\n")
-            try:
-                key.chmod(0o600)
-            except OSError:
-                pass
-
-    def esc(self, script, env=None):
-        return self.sh(script, env=env, libs=self.LIBS)
-
-    def refuse(self, cmd, env=None):
-        """Trigger a refusal and return (result, escalation-id-or-None)."""
-        r = self.guard_run(cmd, env=env)
-        m = re.search(r"id=([A-Za-z0-9._-]+)", r.stderr or "")
-        return r, (m.group(1) if m else None)
-
-    def confirmable_command(self):
-        """A command the light mode classifies as confirmable, or SKIP."""
-        for cmd in (
-            "git config user.name someone",
-            "git remote add other https://example.invalid/x.git",
-            "rm -f docs/evidence/M1/probe.txt",
-            "python3 -c 'print(1)'",
-        ):
-            r, esc_id = self.refuse(cmd)
-            if r.returncode == BLOCK and esc_id and "ESCALATABLE" in r.stderr:
-                return cmd, esc_id, r
-        raise unittest.SkipTest(
-            "no confirmable refusal was produced by this build; the guard printed no "
-            "'This refusal is ESCALATABLE (id=...)' line for any of the documented "
-            "human-approvable command forms"
-        )
-
-    def mint(self, esc_id, rule=None, tool="Bash", target_sha=None, ttl=1800, run_token=None):
-        """Sign an approval the way approve.sh would, using the harness's own
-        binding + HMAC helpers. Never re-implements the MAC."""
-        script = (
-            'command -v esc_binding >/dev/null 2>&1 || exit 3; '
-            'command -v esc_hmac >/dev/null 2>&1 || exit 3; '
-            'id=%s; rule=%s; tool=%s; tsha=%s; '
-            'tok=%s; [ -n "$tok" ] || tok="$(esc_run_token 2>/dev/null)"; '
-            'exp=$(( $(date +%%s) + %d )); '
-            'b="$(esc_binding "$id" "$rule" "$tool" "$tsha" "$tok" "$exp")"; '
-            'mac="$(esc_hmac "$b")"; '
-            'printf "%%s\\t%%s\\t%%s\\n" "$exp" "$tok" "$mac"'
-        ) % (
-            json.dumps(esc_id),
-            json.dumps(rule or ""),
-            json.dumps(tool),
-            json.dumps(target_sha or ""),
-            json.dumps(run_token or ""),
-            ttl,
-        )
-        r = self.esc(script)
-        if r.returncode == 3:
-            raise unittest.SkipTest(
-                "escalation-lib exposes no esc_binding/esc_hmac pair; the suite will not "
-                "guess at the MAC construction"
-            )
-        parts = r.stdout.strip().split("\t")
-        if len(parts) != 3:
-            raise unittest.SkipTest("could not derive an approval binding: %r" % r.stdout)
-        exp, tok, mac = parts
-        rec = {
-            "version": 1,
-            "id": esc_id,
-            "rule": rule or "",
-            "tool": tool,
-            "target_sha": target_sha or "",
-            "run_token": tok,
-            "expiry": int(exp),
-            "expires": int(exp),
-            "mac": mac,
-            "approved_at": int(time.time()),
-        }
-        ledger = self.tmp / ".pipeline/escalations/ledger.jsonl"
-        ledger.parent.mkdir(parents=True, exist_ok=True)
-        with ledger.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec) + "\n")
-        return rec
-
-
-class TestEscalationIsRefusedByDefault(EscalationCase):
-    def test_a_confirmable_refusal_carries_an_id_and_the_exact_bytes(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd, esc_id, r = self.confirmable_command()
-        self.assertEqual(r.returncode, BLOCK)
-        store = self.tmp / ".pipeline/escalations"
-        blob = "".join(read(p) for p in store.rglob("*") if p.is_file()) if store.is_dir() else ""
-        self.assertIn(
-            cmd,
-            blob,
-            "the refusal must record the EXACT bytes it refused - nothing is retyped, "
-            "so the human reviews what was refused rather than the agent's account of it",
-        )
-
-    def test_escalate_sh_refuses_a_never_escalatable_rule(self):
-        need("escalate.sh")
-        r, esc_id = self.refuse("git push --force origin main")
-        self.assertEqual(r.returncode, BLOCK)
-        self.assertIsNone(esc_id, "a never-escalatable refusal must not offer an id")
-        out = subprocess.run(
-            [BASH, str(self.hooks_dir() / "escalate.sh"), "request", "force-push", "because"],
-            capture_output=True,
-            text=True,
-            cwd=str(self.tmp),
-            env=self.env,
-            timeout=60,
-        )
-        self.assertNotEqual(
-            out.returncode, 0, "escalate.sh filed a request for a never-escalatable rule"
-        )
-
-    def test_approve_sh_is_not_agent_reachable(self):
-        need("guard.sh", "approve.sh")
-        for cmd in (
-            ".claude/hooks/approve.sh abc123",
-            "bash .claude/hooks/approve.sh abc123",
-            "sh ./.claude/hooks/approve.sh abc123",
-            "cd .claude/hooks && ./approve.sh abc123",
-        ):
-            with self.subTest(cmd=cmd):
-                self.assertEqual(
-                    self.guard_run(cmd).returncode,
-                    BLOCK,
-                    "the agent must not be able to approve its own request: %s" % cmd,
-                )
-
-    def test_approve_sh_refuses_without_a_terminal(self):
-        need("approve.sh")
-        r = subprocess.run(
-            [BASH, str(self.hooks_dir() / "approve.sh"), "abc123"],
-            input="",
-            capture_output=True,
-            text=True,
-            cwd=str(self.tmp),
-            env=self.env,
-            timeout=60,
-        )
-        self.assertNotEqual(
-            r.returncode, 0, "approve.sh must require a TTY; a pipe is not a human"
-        )
-
-    def test_the_agent_cannot_read_the_key(self):
-        need("guard.sh")
-        self.assertTrue(self.blocked("cat secrets/escalation.key"))
-        self.assertTrue(self.blocked("cp secrets/escalation.key /tmp/k"))
-        if (self.hooks_dir() / "scope-guard.sh").is_file():
-            self.assertTrue(self.scope_blocked(self.tmp / "secrets/escalation.key"))
-
-
-class TestApprovalCannotBeReused(EscalationCase):
-    def test_a_valid_approval_permits_exactly_once(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd, esc_id, _ = self.confirmable_command()
-        self.mint(esc_id)
-        first = self.guard_run(cmd)
-        if first.returncode == BLOCK:
-            self.skipTest(
-                "a minted approval did not permit the call; the suite cannot tell a "
-                "single-use property from a signing-interface mismatch"
-            )
-        second = self.guard_run(cmd)
-        self.assertEqual(
-            second.returncode,
-            BLOCK,
-            "the approval was consumed by the first call and must not permit a second",
-        )
-
-    def test_an_expired_approval_does_not_permit(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd, esc_id, _ = self.confirmable_command()
-        self.mint(esc_id, ttl=-60)
-        self.assertEqual(
-            self.guard_run(cmd).returncode, BLOCK, "an approval past its TTL must not permit"
-        )
-
-    def test_an_approval_from_another_run_does_not_permit(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd, esc_id, _ = self.confirmable_command()
-        self.mint(esc_id, run_token="some-other-run-token")
-        self.assertEqual(
-            self.guard_run(cmd).returncode,
-            BLOCK,
-            "every approval dies at gate closure; one bound to another run must not permit",
-        )
-
-    def test_one_byte_different_is_a_different_command(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd, esc_id, _ = self.confirmable_command()
-        self.mint(esc_id)
-        variant = cmd.replace(" ", "  ", 1)
-        self.assertEqual(
-            self.guard_run(variant).returncode,
-            BLOCK,
-            "the approval names a sha256 of exact bytes, never a command class; one "
-            "space different is a different command",
-        )
-
-    def test_an_approval_for_one_rule_does_not_lift_another(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd, esc_id, _ = self.confirmable_command()
-        self.mint(esc_id)
-        self.assertEqual(
-            self.guard_run("cat .env").returncode,
-            BLOCK,
-            "an approved rule does not skip the other rules",
-        )
-
-    def test_a_forged_mac_does_not_permit(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd, esc_id, _ = self.confirmable_command()
-        rec = self.mint(esc_id)
-        ledger = self.tmp / ".pipeline/escalations/ledger.jsonl"
-        lines = [l for l in read(ledger).splitlines() if l.strip()]
-        rec["mac"] = "f" * len(rec["mac"])
-        lines[-1] = json.dumps(rec)
-        write(ledger, "\n".join(lines) + "\n")
-        self.assertEqual(
-            self.guard_run(cmd).returncode, BLOCK, "a record with a bad MAC must not permit"
-        )
-
-
-class TestNeverEscalatableStaysAWall(EscalationCase):
-    def test_a_signed_approval_for_a_never_escalatable_rule_is_ignored(self):
-        need("guard.sh", "escalation-lib.sh")
-        cmd = "git push --force origin main"
-        try:
-            self.mint("forged-never-id", rule="force-push")
-        except unittest.SkipTest:
-            raise
-        self.assertEqual(
-            self.guard_run(cmd).returncode,
-            BLOCK,
-            "a validly signed approval for a never-escalatable rule must still refuse - "
-            "otherwise the never class is 'never unless someone clicks yes'",
-        )
-
-    def test_the_control_set_cannot_be_written_through_an_approval(self):
-        need("scope-guard.sh", "escalation-lib.sh")
-        for rel in CONTROL_SET:
-            try:
-                self.mint("forged-control-id", rule="control-layer", tool="Write")
-            except unittest.SkipTest:
-                raise
-            with self.subTest(path=rel):
-                self.assertTrue(
-                    self.scope_blocked(self.tmp / rel),
-                    "%s is in the control set; the files that decide what an approval "
-                    "MEANS cannot be changed by one" % rel,
-                )
-
-    def test_an_ambiguous_edit_has_no_derivable_target_sha(self):
-        """The approval binds to the sha256 of the RESULTING file. An Edit whose
-        old_string appears more than once has no single result, so it cannot be
-        approved at all - and the refusal must say that, not blame the caller
-        for something else."""
-        need("scope-guard.sh")
-        target = self.tmp / ".claude/hooks/notes.md"
-        write(target, "duplicate\nduplicate\n")
-        r = self.scope_run(target, tool="Edit", old="duplicate", content="unique")
-        self.assertEqual(r.returncode, BLOCK)
-        self.assertRegex(
-            r.stderr,
-            r"(?i)(ambiguous|more than once|not.*deriv|unique)",
-            "the refusal must name the ambiguity: %r" % r.stderr,
-        )
-
-
-# --------------------------------------------------------------------------
-# THE REMAINING SEEDED LESSONS
-# --------------------------------------------------------------------------
 class TestControlLayerIsAvailable(GateCase):
     """SEEDED LESSON: availability-before-security.
 
@@ -2761,31 +2346,6 @@ class TestControlLayerIsAvailable(GateCase):
         hso = obj.get("hookSpecificOutput", {})
         self.assertEqual(hso.get("hookEventName"), "SessionStart")
         self.assertIn("additionalContext", hso)
-
-    def test_negative_a_missing_escalation_key_is_REPORTED_not_silently_fatal(self):
-        """The mismatched payload: break the control layer and check it SAYS so.
-        A self-test that only ever runs against a healthy install proves the
-        install is healthy today and nothing about tomorrow."""
-        need("session-start.sh")
-        key = self.tmp / "secrets/escalation.key"
-        write(key, "x" * 64 + "\n")
-        healthy = self.hook("session-start.sh", {"session_id": "s1"})
-        key.unlink()
-        broken = self.hook("session-start.sh", {"session_id": "s1"})
-        self.assertEqual(broken.returncode, 0, "a missing key must not kill the session")
-        blob = broken.stdout + broken.stderr
-        self.assertRegex(
-            blob,
-            r"(?i)(escalation|key)",
-            "the escalation key is missing and session-start said nothing. A control "
-            "the human cannot see is broken is a control with MTTR = forever.",
-        )
-        self.assertNotEqual(
-            healthy.stdout,
-            broken.stdout,
-            "session-start produced identical output with and without the key - it is "
-            "not looking at the key at all",
-        )
 
     def test_scratch_outside_the_repo_stays_usable(self):
         """The agent's own scratch is not the project's control layer. Refusing
@@ -2907,77 +2467,6 @@ class TestCommitScopeMustBeDeclared(GateCase):
     # test_the_findings_ledger_reconciles_against_the_boards_raw_output exercised
     # check_done.py's findings-ledger check (4), removed 2026-08-23 with the other
     # 16 non-load-bearing checks (decisions doc).
-
-
-class TestDisclosedRedHasAHome(GateCase):
-    """SEEDED LESSON: settled-ruling-needs-a-home.
-
-    Every other verdict in this system has a home: a finding has a disposition
-    column, a checkpoint a verdict file, a merge a consent record. A human
-    ruling that a red check ships anyway had none, so the gate was
-    STRUCTURALLY REQUIRED to re-derive it every turn - it blocked ten times in
-    3h19m and exhausted its three-attempt cap four times against reds a card had
-    already settled. That is not strictness; it is a missing state file.
-    """
-
-    def test_the_merge_ruling_lives_in_a_file_and_is_not_re_asked(self):
-        need("guard.sh")
-        self.assertTrue(self.blocked("gh pr merge 42 --squash"), "no record, no merge")
-        self.consent(pr=42)
-        first = self.guard_run("gh pr merge 42 --squash")
-        second = self.guard_run("gh pr merge 42 --squash")
-        self.assertNotEqual(first.returncode, BLOCK, "the record must settle the question")
-        self.assertNotEqual(
-            second.returncode,
-            BLOCK,
-            "the gate re-asked a question already answered on disk; that is the "
-            "ten-blocks-in-3h19m failure",
-        )
-
-    def test_negative_a_ruling_held_only_in_prose_does_not_persuade_the_gate(self):
-        """The mismatched payload. The journal is prose; prose is not a record."""
-        need("guard.sh")
-        write(
-            self.tmp / ".pipeline/run-journal.md",
-            "## 2026-08-20\nThe human said on the call that this may ship. Merging PR 42.\n",
-        )
-        self.assertTrue(
-            self.blocked("gh pr merge 42 --squash"),
-            "a sentence in the journal was accepted as consent",
-        )
-
-    def test_a_disclosed_red_renders_DISCLOSED_and_not_PASS(self):
-        need("check_done.py", "approve.sh", "escalation-lib.sh")
-        r = subprocess.run(
-            [BASH, str(self.hooks_dir() / "approve.sh"), "--disclose", "12-narrative"],
-            input="",
-            capture_output=True,
-            text=True,
-            cwd=str(self.tmp),
-            env=self.env,
-            timeout=60,
-        )
-        if r.returncode == 0:
-            self.fail("approve.sh --disclose ran without a TTY; a disclosure is an approval")
-        self.skipTest(
-            "a disclosure record cannot be minted without a terminal; the DISCLOSED "
-            "rendering is covered by approve.sh's own TTY refusal above"
-        )
-
-    def test_the_disclosure_vocabulary_is_never_PASS(self):
-        """Whatever the mechanism, the WORD matters: a disclosure authorises
-        'a human read this exact failure and ruled the run may ship with it',
-        never 'this check passes'."""
-        need("check_done.py")
-        body = read(self.hooks_dir() / "check_done.py")
-        if "DISCLOS" not in body.upper():
-            self.skipTest("this build does not implement disclosures")
-        self.assertIn(
-            "DISCLOSED",
-            body,
-            "a disclosed check must render DISCLOSED - a disclosure that renders PASS "
-            "has erased the ruling it was meant to record",
-        )
 
 
 class TestCitedEvidencePathIsRetained(GateCase):
@@ -3890,7 +3379,6 @@ class TestSeededLessonNamesResolve(NoRepoCase):
         "decide-by-effect-not-verb": "TestWriteEffectBeatsReadCarveOut",
         "reader-writer-drift": "TestCheckDrivenWithMismatchedPayload",
         "unaudited-self-account": "TestCommitScopeMustBeDeclared",
-        "settled-ruling-needs-a-home": "TestDisclosedRedHasAHome",
         "artifacts-outlive-their-run": "TestCitedEvidencePathIsRetained",
         "registers-over-prose": "TestPendingActionsAreRankedAndPrinted",
         "independent-verdict-writer": "TestClearVerdictIsSelfWritten",
@@ -3951,7 +3439,7 @@ def _method(test):
 # any change to the control layer. Chosen to stay near half a minute, because a
 # scaffolding step nobody waits for is a scaffolding step people skip.
 QUICK_CLASSES = (
-    "TestEveryGuardRuleIdIsClassified",   # an unclassified rule is a silent wall
+    "TestEveryRefusalCarriesAWayForward", # a wall with no door beside it
     "TestDenyPartitionIsConsistent",      # settings deny vs ESC_NEVER agree
     "TestLawsAreIdenticalEverywhere",     # the 12 law copies have not drifted
     "TestNoProjectNounsLeak",             # the harness is actually generic
@@ -3960,7 +3448,6 @@ QUICK_CLASSES = (
     "TestGuardProtectsSecrets",           # secrets are unreachable
     "TestShipFlowIsTwoFactor",            # nothing reaches the base branch alone
     "TestScopeGuardTier2b",               # human-owned files stay human-owned
-    "TestApprovalCannotBeReused",         # single-use, byte-exact, run-bound
     "TestEveryPathDialectReducesToOne",   # WSL/Git-Bash/Linux all mean one repo
 )
 
@@ -4120,23 +3607,6 @@ class TestDispatchStoreIsNotAgentWritable(RepoCase):
                                  "not refused: %s\n%s" % (c, r.stderr))
                 self.assertIn("dispatch-store-write", r.stderr,
                               "wrong rule id for: %s" % c)
-
-    def test_the_rule_is_never_escalatable(self):
-        """MISMATCHED PAYLOAD: a rule that classified as `confirmable` would let
-        a human approve a widening of the agent's own scope, which is the same
-        hole with a signature on it. Drive the classifier and require `never`."""
-        need("escalation-lib.sh")
-        r = self.sh('esc_classify dispatch-store-write',
-                    libs=("ratchet.config.sh", "escalation-lib.sh"))
-        self.assertEqual(r.stdout.strip(), "never",
-                         "dispatch-store-write must be never-escalatable, got: %r"
-                         % r.stdout.strip())
-        # the opposite verdict, to prove the classifier is not stuck on `never`
-        r2 = self.sh('esc_classify partition-glob-violation',
-                     libs=("ratchet.config.sh", "escalation-lib.sh"))
-        self.assertEqual(r2.stdout.strip(), "confirmable",
-                         "control test failed: the classifier answers `never` to "
-                         "everything, so the assertion above proves nothing")
 
     def test_settings_denies_the_dispatch_store_too(self):
         """The second layer. settings.json deny is what holds when guard.sh's

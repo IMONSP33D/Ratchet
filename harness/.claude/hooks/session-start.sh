@@ -28,8 +28,7 @@
 #      recurrence never climbs on its own -- a pure threshold would never
 #      print them).
 #   5. Three control-layer self-test probes: test_hooks.py --smoke; the
-#      approve-and-continue escalation channel (key present, approve.sh
-#      runnable); the pager (RATCHET_WEBHOOK_URL set, https, notify.sh
+#      the pager (RATCHET_WEBHOOK_URL set, https, notify.sh
 #      present). Probing before any of them is needed is the point - a
 #      control layer that is broken at 03:00 on the tenth block, or a pager
 #      that pages nobody, should have said so at 09:00 when the session
@@ -225,30 +224,7 @@ _pending_must_print() {
   printf '%s' "$out"
 }
 
-# _channel_probe - is the approve-and-continue channel USABLE, right now?
-#
-# lesson availability-before-security: the control layer is an availability
-# surface before it is a security surface, and it cannot repair itself. A
-# missing signing key does not surface until an agent is already blocked and
-# mid-run, at which point MTTR is however long the human takes to notice. So we
-# probe the channel BEFORE it is needed and say so in plain words.
-_channel_probe() {
-  local key="${ESCALATION_KEY:-secrets/escalation.key}" issues=""
-  if [ ! -f "$key" ]; then
-    issues="MISSING - no escalation signing key at $key. Every refusal is a dead end until a human runs: .claude/hooks/approve.sh --init-key"
-  elif [ ! -r "$key" ]; then
-    issues="UNREADABLE - the escalation key at $key cannot be read by the gate; approvals cannot be verified."
-  elif [ ! -s "$key" ]; then
-    issues="EMPTY - the escalation key at $key is zero bytes; approvals cannot be verified."
-  fi
-  if [ -z "$issues" ] && [ -r "$RT_SELF_DIR/approve.sh" ] && [ ! -x "$RT_SELF_DIR/approve.sh" ]; then
-    issues="NOT EXECUTABLE - approve.sh cannot be run; the human half of the channel is unreachable."
-  fi
-  if [ -n "$issues" ]; then printf 'FAIL - escalation channel %s' "$issues"; return 0; fi
-  printf 'PASS - escalation channel ready (key present, approve.sh runnable)'
-}
-
-# _webhook_probe - can a stopped/escalated run actually page anyone?
+# _webhook_probe - can a stopped run actually page anyone?
 #
 # PENDING-HUMAN-ACTIONS.md's webhook-never-configured row has always claimed
 # "session-start.sh warns at every run start" -- this is that warning. Without
@@ -439,21 +415,16 @@ main() {
     _add ""
   fi
 
-  local probe chan pager
+  local probe pager
   probe="$(_smoke_probe)"
-  chan="$(_channel_probe)"
   pager="$(_webhook_probe)"
   _add "## Control-layer self test"
   _add ""
   _add "$probe"
-  _add "$chan"
   _add "$pager"
   _add ""
   case "$probe" in
     FAIL*) _add "The control layer is probing FAILED at session start. Gates that fail closed will block, and a block you cannot clear is the expected consequence. Fix this before dispatching anything." ;;
-  esac
-  case "$chan" in
-    FAIL*) _add "The approve-and-continue channel is NOT usable. Refusals that say they are ESCALATABLE are lying: nothing can sign them. File this in PENDING-HUMAN-ACTIONS and raise it on the first Decision Card - do not discover it mid-run against a deadline." ;;
   esac
   case "$pager" in
     FAIL*) _add "No pager is configured. A stopped or escalated unattended run will NOT reach a human -- see webhook-never-configured in PENDING-HUMAN-ACTIONS.md." ;;
@@ -463,7 +434,6 @@ main() {
     bash "$RT_SELF_DIR/pipeline-event.sh" session_start \
       "milestone=${milestone:-}" "active=$active" "work=$work" "wall=$wall" \
       "smoke=$(case "$probe" in PASS*) echo pass ;; *) echo fail ;; esac)" \
-      "channel=$(case "$chan" in PASS*) echo pass ;; *) echo fail ;; esac)" \
       "pager=$(case "$pager" in PASS*) echo pass ;; *) echo fail ;; esac)" >/dev/null 2>&1 || true
   fi
 

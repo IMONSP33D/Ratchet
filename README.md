@@ -37,7 +37,7 @@ there is no separate PowerShell installer; see <a href="#requirements">Requireme
 
 [Who this is for](#who-this-is-for) · [The core idea](#the-core-idea-a-four-directory-ownership-partition) ·
 [What stops the agent](#what-actually-stops-the-agent) · [The twelve seats](#the-twelve-seats) ·
-[Human stop points](#the-two-human-stop-points) · [Approve-and-continue](#approve-and-continue) ·
+[Human stop points](#the-two-human-stop-points) · [Every refusal is final](#every-refusal-is-final) ·
 [Install](#install) · [Config surface](#config-surface) · [Commit conventions](#commit-conventions) ·
 [Limitations](#limitations-stated-plainly) · [Layout](#layout-after-install)
 
@@ -78,10 +78,10 @@ then agrees with it.
 
 Two of those four are things the agent *cannot* write. That is the harness.
 
-> **Two exceptions inside `.pipeline/`.** The escalation store (`.pipeline/escalations/`) and the
+> **One exception inside `.pipeline/`.** The
 > dispatch store (`.pipeline/dispatch/`) are denied to the agent even though they sit in its own
 > scratch. An approval means nothing if the agent can edit the ledger it is recorded in, and a
-> partition glob means nothing if the agent can widen it. Both are never-escalatable.
+> partition glob means nothing if the agent can widen it. It is permanently refused.
 
 ---
 
@@ -177,32 +177,41 @@ and filed by the installer as a mandatory human action for exactly this reason.
 
 ---
 
-## Approve-and-continue
+## Every refusal is final
 
-Some refusals are a question a human can answer in about ten seconds. Ratchet splits refusals into
-two classes and the guard tells you which one you hit.
+There is no approval channel, and that is a deliberate choice rather than a missing feature.
 
-**Escalatable.** The refusal prints `This refusal is ESCALATABLE (id=...)`. The agent files a request
-naming the exact bytes it tried; you run `.claude/hooks/approve.sh <id>` **in your own terminal**; the
-agent re-issues the identical call and it goes through. The approval is:
+Ratchet used to have one: a refusal could print an id, you signed it with an HMAC in your own
+terminal, and the agent re-issued the identical call. It was removed in 1.2.3 after auditing all
+fifteen rules it could unlock. **None of them needed a human.** Each was either something the agent
+should do correctly itself (name the push target, split the compound command, amend the manifest),
+something a fixed policy should decide (repo-local git identity is fine; changing the remote is
+not), or something that should never have been unlockable at all.
 
-- **byte-exact** — bound to a sha256 of the command or the resulting file, not to a command class.
-  One space different is a different command.
-- **single-use**, recorded in an append-only ledger.
-- **~30 minutes**, and bound to this run. Every approval dies at gate closure.
-- **not producible by the agent.** It is an HMAC over a key the agent is denied from reading at two
-  layers, and `approve.sh` is denied to the agent at three and refuses to run without a terminal.
+A channel that pauses an autonomous run to ask permission for a decision nobody was adding judgment
+to is not a safety feature — it is a stall with a ceremony attached, and it lands at 3am when you
+are asleep.
 
-**Never-escalatable.** Secrets and keys · force push · pushing or committing to the base branch
+So a refusal now means *this call will never work*, and the burden moves onto the message: every
+block names its rule and prints **`Do this instead:`** with the way forward. You can read the whole
+table without triggering anything:
+
+```bash
+.claude/hooks/guard.sh --explain push-target-unprovable
+# -> Name the target: git push -u origin <your-branch>.
+```
+
+A rule that refuses with no alternative is a bug in the control layer, and the test suite asserts
+against it — a wall with no door beside it is how an unattended run dies.
+
+**What stays walled:** secrets and keys · force push · pushing or committing to the base branch
 outside the ship flow · the governing corpus · the control layer's own files (`settings.json`,
 `settings.local.json`, `settings.template.json`, `guard.sh`, `scope-guard.sh`, `hooklib.sh`,
-`escalation-lib.sh`, `approve.sh`, `ratchet.config.sh`) ·
-and the harness's own state stores (the escalation ledger and records, the dispatch globs and
-baselines).
+`ratchet.config.sh`) · the dispatch globs and baselines. The files that decide what an agent may do
+cannot be changed by an agent, and neither can the file that defines its lane.
 
-Nothing lifts these — not an approval, not a card, not a domain pack. **The files that decide what an
-approval means cannot themselves be changed by one**, and neither can the file that defines an
-approval's scope. That boundary is what makes the escalatable class safe to have at all.
+**The two human stop points are unchanged** — the Ship Prompt, and a material Decision Card. Those
+are questions where a human genuinely adds judgment, which is exactly what the fifteen were not.
 
 ---
 
@@ -241,7 +250,6 @@ git clone <ratchet-repo> ratchet && cd ratchet
 | `--stack <name>` | `python-pytest`, `node-jest`, `generic`. Default: auto-detected. |
 | `--project-name <s>` | Human label. Default: repo folder name. |
 | `--domain none\|interactive` | Run the domain interview now, or later. |
-| `--escalation-mode light\|strict` | How broad the escalatable class is. |
 | `--base-branch <b>` | The protected branch. Default: detected, else `main`. |
 | `--verify quick\|smoke\|full\|none` | Post-install suite tier. Default `quick`. `full` is ~25 min under Git-Bash. |
 | `--dry-run` | Print every action; perform none. |
@@ -294,7 +302,7 @@ supervisor-changeset pattern.
 
 One file, every knob, all `${VAR:-default}` so the environment can override any of them for one run
 without editing a tracked file. Paths, caps (`MAX_STOP_RETRIES`, `MAX_REVIEW_ROUNDS`,
-`MAX_RUN_WORK_SECONDS`), narrative budgets, the base branch, the escalation TTL, the webhook URL.
+`MAX_RUN_WORK_SECONDS`), narrative budgets, the base branch, the webhook URL.
 
 One caps detail worth knowing: the run budget counts **work time, not wall time.** Every hook firing
 updates a last-seen marker, and a gap longer than the idle threshold is folded out. Leaving a run open
@@ -326,7 +334,7 @@ about your project:
   cents"; "no query without a tenant filter");
 - what must never be hardcoded (**law 5**); where credentials live (**law 6**);
 - security-boundary files, banned-read files, the governing corpus;
-- extra never-escalatable rule ids; the arbiter label; a review lens and a security pass injected into
+- the arbiter label; a review lens and a security pass injected into
   the two board seats.
 
 **An empty domain pack is valid and common.** `--domain none` still gets you the control layer, the
@@ -412,7 +420,7 @@ your-repo/
   .pipeline/                 run scratch; runtime gitignored, the record tracked
   .agent-development/        run retros, ACTIVE-LESSONS.md, PENDING-HUMAN-ACTIONS.md
   docs/evidence/             WIN-row proof, probe transcripts
-  secrets/                   escalation signing key only; gitignored and verified
+  secrets/                   credentials, if you keep any; gitignored and verified
 ```
 
 ---

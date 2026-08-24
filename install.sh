@@ -29,7 +29,6 @@
 #   --stack <name>            python-pytest | node-jest | generic  (default: auto-detect)
 #   --project-name <name>     human label                     (default: repo dir name)
 #   --domain none|interactive run the domain interview?       (default: none)
-#   --escalation-mode light|strict                            (default: light)
 #   --base-branch <name>      the protected branch            (default: detected, else main)
 #   --dry-run                 print every action, do nothing
 #   --force                   proceed despite a dirty worktree
@@ -471,7 +470,6 @@ TARGET=""
 STACK=""
 PROJECT_NAME=""
 DOMAIN_MODE="none"
-ESCALATION_MODE="light"
 BASE_BRANCH=""
 DRY_RUN=0
 FORCE=0
@@ -495,8 +493,6 @@ while [ $# -gt 0 ]; do
     --project-name=*)  PROJECT_NAME="${1#--project-name=}" ;;
     --domain)          shift; [ $# -gt 0 ] || die "--domain needs none|interactive"; DOMAIN_MODE="$1" ;;
     --domain=*)        DOMAIN_MODE="${1#--domain=}" ;;
-    --escalation-mode) shift; [ $# -gt 0 ] || die "--escalation-mode needs light|strict"; ESCALATION_MODE="$1" ;;
-    --escalation-mode=*) ESCALATION_MODE="${1#--escalation-mode=}" ;;
     --base-branch)     shift; [ $# -gt 0 ] || die "--base-branch needs a name"; BASE_BRANCH="$1" ;;
     --base-branch=*)   BASE_BRANCH="${1#--base-branch=}" ;;
     --dry-run|-n)      DRY_RUN=1 ;;
@@ -518,10 +514,6 @@ done
 case "$DOMAIN_MODE" in
   none|interactive) ;;
   *) die "--domain must be 'none' or 'interactive' (got: $DOMAIN_MODE)" ;;
-esac
-case "$ESCALATION_MODE" in
-  light|strict) ;;
-  *) die "--escalation-mode must be 'light' or 'strict' (got: $ESCALATION_MODE)" ;;
 esac
 
 # The style was initialised once already so that a `die` during argument
@@ -766,16 +758,6 @@ else
   warn "gh (GitHub CLI) not found. Everything up to the Ship Prompt works without it,"
   say "        but the run ends by opening a PR and merging it, and both are gh."
   say "        Fix:  https://cli.github.com  then: gh auth login"
-fi
-
-# --- randomness for the escalation key -------------------------------------
-if command -v openssl >/dev/null 2>&1; then
-  ok "openssl (escalation key source)"
-elif [ -r /dev/urandom ]; then
-  ok "/dev/urandom (escalation key source)"
-else
-  warn "no openssl and no readable /dev/urandom. The escalation signing key cannot be"
-  say "        generated automatically; you will have to create it by hand."
 fi
 
 # --- stack detection + stack tool checks (WARN only) -----------------------
@@ -1076,7 +1058,7 @@ if [ "$UNINSTALL" = "1" ]; then
   say "    .agent-development/  the learning loop: run retros, lessons, pending actions"
   say "    .pipeline/       the last run's scratch, findings ledger and checkpoints"
   say "    docs/evidence/   WIN-row proof and probe transcripts"
-  say "    secrets/         the escalation signing key (delete it yourself if you mean to)"
+  say "    secrets/         anything you put there (delete it yourself if you mean to)"
   say "    .claude/hooks/domain.config.sh   your domain pack: the walls you configured"
   say "    .claude/settings.json.bak-*      every backup this installer ever took"
   say ""
@@ -1119,7 +1101,7 @@ rt_sub "Scaffolding the four-directory partition"
 for d in \
   .claude/hooks/stack .claude/agents .claude/doctrine \
   .context/archive/decisions \
-  .pipeline/checkpoints .pipeline/escalations .pipeline/dispatch .pipeline/archive \
+  .pipeline/checkpoints .pipeline/dispatch .pipeline/archive \
   .agent-development/runs .agent-development/consolidated \
   .agent-development/metrics .agent-development/proposals \
   docs/evidence \
@@ -1376,9 +1358,7 @@ $SECRET_DENY"
     -e "s|{{RATCHET_BASE_BRANCH}}|$(esc_sed "$BASE_BRANCH")|g" \
     -e "s|{{BASE_BRANCH}}|$(esc_sed "$BASE_BRANCH")|g" \
     -e "s|{{RATCHET_AGENT_BRANCH_PREFIX}}|agent/|g" \
-    -e "s|{{RATCHET_ESCALATION_MODE}}|$(esc_sed "$ESCALATION_MODE")|g" \
     -e "s|{{RATCHET_SECRETS_DIR}}|secrets|g" \
-    -e "s|{{RATCHET_ESCALATION_KEY}}|secrets/escalation.key|g" \
     -e "s|{{RATCHET_GENERATED_AT}}|$(date -u +%Y-%m-%dT%H:%M:%SZ)|g" \
     "$TEMPLATE" > "$GEN" 2>/dev/null
 
@@ -1513,11 +1493,6 @@ else
     chmod +x "$f" 2>/dev/null && n=$((n+1))
   done
   ok "chmod +x on $n hook files"
-  # approve.sh is human-only. Layer 1 is the settings deny, layer 2 is guard.sh,
-  # layer 3 is its own TTY check. It stays executable BY YOU on purpose.
-  if [ -f "$TARGET/.claude/hooks/approve.sh" ]; then
-    ok "approve.sh installed (human-only: denied to the agent at three layers)"
-  fi
 fi
 
 # ============================================================================
@@ -1546,7 +1521,7 @@ if [ "$DRY_RUN" != "1" ] && [ ! -f "$GITIGNORE" ]; then
   : > "$GITIGNORE" && record "F .gitignore"
 fi
 
-ensure_ignore "secrets/" "# --- Ratchet: the escalation signing key lives here. Never commit it. ---"
+ensure_ignore "secrets/" "# --- Ratchet: credentials live here. Never commit them. ---"
 ensure_ignore ".env"
 ensure_ignore ".env.local"
 
@@ -1579,7 +1554,6 @@ if [ "$DRY_RUN" != "1" ] && ! grep -qxF "# --- Ratchet: .pipeline/ runtime (per-
       ".pipeline/dispatch/" \
       ".pipeline/.py-interp" \
       ".pipeline/red-baseline.txt" \
-      ".pipeline/escalations/"
     printf '\n%s\n' "# --- Ratchet: .pipeline/ durable record (TRACKED on purpose) ---"
     printf '%s\n' "# These negations are assertions, not fixes: .pipeline/ itself is NOT ignored," \
                   "# so these files are already tracked. They are written down because the" \
@@ -1648,7 +1622,7 @@ if [ "$DRY_RUN" != "1" ]; then
     ok "verified: git will not commit anything under secrets/"
   else
     err "secrets/ is NOT ignored by git, even after writing the .gitignore entry."
-    say "        The escalation signing key is about to be created there. If it is"
+    say "        Anything you keep there would be committed. If a credential lands there"
     say "        committed, every approval in this repo's history becomes forgeable by"
     say "        anyone who can read the repo -- and rotating it will not undo that."
     say ""
@@ -1656,40 +1630,11 @@ if [ "$DRY_RUN" != "1" ]; then
     say "          1. secrets/ is already TRACKED. git ignores .gitignore for files"
     say "             already in the index. Fix:  git -C \"$TARGET\" rm -r --cached secrets"
     say "          2. a later negation in .gitignore re-includes it. Check:"
-    say "             git -C \"$TARGET\" check-ignore -v secrets/escalation.key"
+    say "             git -C \"$TARGET\" check-ignore -v secrets/any.key"
     say "          3. a global core.excludesFile or a parent .gitignore disagrees."
     WARNINGS=$((WARNINGS+1))
   fi
   rm -f "$PROBE" 2>/dev/null
-fi
-
-# --- generate the key ------------------------------------------------------
-KEYFILE="$TARGET/secrets/escalation.key"
-if [ "$DRY_RUN" = "1" ]; then
-  dry "generate secrets/escalation.key via approve.sh --init-key"
-elif [ -f "$KEYFILE" ]; then
-  ok "escalation key already present (not regenerated -- that is deliberate)"
-elif [ -x "$TARGET/.claude/hooks/approve.sh" ]; then
-  if ( cd "$TARGET" && ./.claude/hooks/approve.sh --init-key ) >/dev/null 2>&1 && [ -f "$KEYFILE" ]; then
-    chmod 600 "$KEYFILE" 2>/dev/null
-    ok "generated secrets/escalation.key (mode 0600) via approve.sh --init-key"
-  else
-    warn "approve.sh --init-key did not produce a key. Falling back."
-    if command -v openssl >/dev/null 2>&1; then
-      openssl rand -hex 32 > "$KEYFILE" 2>/dev/null
-    elif [ -r /dev/urandom ]; then
-      od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$KEYFILE" 2>/dev/null
-    fi
-    if [ -s "$KEYFILE" ]; then chmod 600 "$KEYFILE" 2>/dev/null; ok "generated the key directly"
-    else warn "could not generate a key. Run: .claude/hooks/approve.sh --init-key"; fi
-  fi
-else
-  MISSING_FILES="${MISSING_FILES}.claude/hooks/approve.sh
-"
-  warn "approve.sh is not installed, so no escalation key was generated."
-  say "        Without it, every escalatable refusal becomes a hard wall: the guard"
-  say "        will refuse and no human approval can lift it. Run this once approve.sh"
-  say "        exists:   .claude/hooks/approve.sh --init-key"
 fi
 
 # ============================================================================
@@ -1805,9 +1750,7 @@ MAPFILE="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/rt-subs.$$")"
     --arg stack          "${STACK_NAME:-$STACK}" \
     --arg base           "$BASE_BRANCH" \
     --arg prefix         "agent/" \
-    --arg escmode        "$ESCALATION_MODE" \
     --arg secretsdir     "secrets" \
-    --arg esckey         "secrets/escalation.key" \
     --arg verify         "${VERIFY_CMD:-}" \
     --arg fasttest       "${FAST_TEST_CMD:-}" \
     --arg scopedtest     "${SCOPED_TEST_CMD:-}" \
@@ -1826,9 +1769,7 @@ MAPFILE="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/rt-subs.$$")"
       STACK_NAME:$stack,                RATCHET_STACK_NAME:$stack,
       BASE_BRANCH:$base,                RATCHET_BASE_BRANCH:$base,
       AGENT_BRANCH_PREFIX:$prefix,      RATCHET_AGENT_BRANCH_PREFIX:$prefix,
-      ESCALATION_MODE:$escmode,         RATCHET_ESCALATION_MODE:$escmode,
       SECRETS_DIR:$secretsdir,          RATCHET_SECRETS_DIR:$secretsdir,
-      ESCALATION_KEY:$esckey,           RATCHET_ESCALATION_KEY:$esckey,
       VERIFY_CMD:$verify,               RATCHET_VERIFY_CMD:$verify,
       FAST_TEST_CMD:$fasttest,          SCOPED_TEST_CMD:$scopedtest,
       ARBITER_LABEL:$arbiter,           RATCHET_ARBITER_LABEL:$arbiter,
@@ -1862,9 +1803,9 @@ rm -f "$MAPFILE" 2>/dev/null
 # Record the answers so --substitute-only and the next upgrade agree with this run.
 if [ "$DRY_RUN" != "1" ]; then
   jq -n --arg p "$PROJECT_NAME" --arg s "$STACK" --arg b "$BASE_BRANCH" \
-        --arg e "$ESCALATION_MODE" --arg d "$DOMAIN_MODE" --arg v "$RT_INSTALLER_VERSION" \
+        --arg d "$DOMAIN_MODE" --arg v "$RT_INSTALLER_VERSION" \
         --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{project_name:$p, stack:$s, base_branch:$b, escalation_mode:$e, domain_mode:$d,
+    '{project_name:$p, stack:$s, base_branch:$b, domain_mode:$d,
       installer_version:$v, installed_at:$t}' > "$INSTALL_STATE" 2>/dev/null \
     && record "F .claude/.ratchet-install.json"
 fi
@@ -2093,51 +2034,10 @@ if [ -f "$TARGET/.claude/hooks/test_hooks.py" ]; then
   fi
   fi
 
-  # --- postcondition baseline ---------------------------------------------
-  # R-005-03: an approved .claude/ write is judged on whether it made the hook
-  # suite WORSE, not on whether the suite is perfect. On a host with
-  # pre-existing failures, with no baseline recorded, every one of them counts
-  # as new and the postcondition can never clear -- which turns an approvable
-  # write into a permanent wall for reasons that have nothing to do with the
-  # write. Recording the floor NOW, at install time, is the cheapest moment.
-  # BUT: a baseline is a record of "what this host already fails". Recording one
-  # from a RED verification run bakes today's breakage in as normal, and the
-  # postcondition then passes while the control layer is genuinely broken -- the
-  # check would be worse than useless, because it would look green. So the floor
-  # is only recorded from a run that actually passed.
-  if [ "${VERIFY_STATE%% *}" = "FAIL" ]; then
-    warn "NOT recording a postcondition baseline: verification failed."
-    say "        A baseline taken from a red suite records today's failures as this"
-    say "        host's normal state, and the postcondition would then pass while the"
-    say "        control layer is broken. Fix the suite, then run:"
-    say "            .claude/hooks/approve.sh --postcondition-baseline"
-  elif [ "${VERIFY_STATE%% *}" = "PASS" ]; then
-    # The suite just ran and nothing failed. The baseline IS that failure set, so
-    # it is provably empty -- re-running the whole suite to rediscover "nothing
-    # fails" is pure waste, and it was doubling install time. Write it directly.
-    PCB="$TARGET/.pipeline/escalations/postcondition-baseline.txt"
-    mkdir -p "$(dirname "$PCB")" 2>/dev/null || true
-    if : > "$PCB" 2>/dev/null; then
-      ok "recorded the postcondition baseline (empty: the suite is green here)"
-    else
-      warn "could not write the postcondition baseline. Run it yourself:"
-      say "            .claude/hooks/approve.sh --postcondition-baseline"
-    fi
-  elif [ -x "$TARGET/.claude/hooks/approve.sh" ]; then
-    # Verification was skipped or not run, so we do not know the floor: ask for it.
-    PCB_TO=""
-    command -v timeout >/dev/null 2>&1 && PCB_TO="timeout ${RATCHET_INSTALL_VERIFY_TIMEOUT:-900}"
-    rt_spin_start "recording the control-layer postcondition baseline (runs the suite again)..."
-    if ( cd "$TARGET" && $PCB_TO ./.claude/hooks/approve.sh --postcondition-baseline ) >/dev/null 2>&1; then
-      rt_spin_kill
-      ok "recorded the control-layer postcondition baseline"
-    else
-      rt_spin_kill
-      warn "could not record the postcondition baseline automatically. Run it yourself:"
-      say "            .claude/hooks/approve.sh --postcondition-baseline"
-      say "        Skipping it is only harmless on a host where the suite is fully green."
-    fi
-  fi
+  # The postcondition baseline is gone with the escalation channel (2026-08-24).
+  # It recorded "what this host already fails" so that an APPROVED write under
+  # .claude/ could be judged on whether it made the suite worse. No write under
+  # .claude/ can be approved any more, so there is nothing for a floor to judge.
 fi
 
 # ============================================================================
@@ -2239,7 +2139,6 @@ if [ "$DRY_RUN" = "1" ]; then
   rt_box_kv   light "stack pack"       "$STACK"
   rt_box_kv   light "domain pack"      "$DOMAIN_MODE"
   rt_box_kv   light "base branch"      "$BASE_BRANCH"
-  rt_box_kv   light "escalation"       "$ESCALATION_MODE"
   rt_box_kv   light "warnings"         "$WARNINGS"
   rt_box_line light ""
   rt_box_bottom light
@@ -2265,7 +2164,6 @@ rt_box_kv   light "project name"   "$PROJECT_NAME"
 rt_box_kv   light "stack pack"     "$STACK"
 rt_box_kv   light "domain pack"    "$DOMAIN_MODE"
 rt_box_kv   light "base branch"    "$BASE_BRANCH"
-rt_box_kv   light "escalation"     "$ESCALATION_MODE"
 rt_box_kv   light "verification"   "$VERIFY_STATE" "$RT_VCOL"
 rt_box_kv   light "warnings"       "$WARNINGS"     "$RT_WCOL"
 rt_box_line light ""
