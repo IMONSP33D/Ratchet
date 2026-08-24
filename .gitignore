@@ -12,6 +12,13 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Never, under any circumstances. The signing key forges approvals forever.
+# Never, under any circumstances. Credentials must not enter history.
 secrets/
 *.key
+
+# Session scratch from the device bridge: base64/tar staging, and the holding pen
+# this mount needs because it cannot unlink() (mv works, rm does not). Neither is
+# repo content, and _transfer/ accumulates multi-hundred-KB tarballs.
+_transfer/
+_to_delete/
+_patched-2026-08-23/

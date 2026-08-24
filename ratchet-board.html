@@ -1,0 +1,385 @@
+<title>Ratchet Change Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+:root{
+  --ground:#F2F5F8; --surface:#FFFFFF; --surface-2:#E7ECF2;
+  --ink:#0E1620; --ink-2:#3C4A5C; --ink-3:#6A798D;
+  --rule:#CFD8E2; --rule-strong:#A9B7C7;
+  --steel:#1B4B76; --steel-soft:#E2EBF4;
+  --defect:#C22715; --defect-soft:#FBE8E4;
+  --bloat:#8F5D00; --bloat-soft:#FAEFD8;
+  --go:#1D6B4F; --go-soft:#DFF0E8;
+  --ritual:#556477; --ritual-soft:#E6EAF0;
+  --shadow:0 1px 2px rgba(14,22,32,.05), 0 6px 18px -14px rgba(14,22,32,.3);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0A1017; --surface:#111A24; --surface-2:#18232F;
+    --ink:#E4EBF3; --ink-2:#A6B4C4; --ink-3:#728296;
+    --rule:#22303E; --rule-strong:#33465A;
+    --steel:#79ADD9; --steel-soft:#14273A;
+    --defect:#FF7358; --defect-soft:#2E1510;
+    --bloat:#DCA53F; --bloat-soft:#2B2110;
+    --go:#5FC79A; --go-soft:#0F2A20;
+    --ritual:#8395A9; --ritual-soft:#1A222C;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0A1017; --surface:#111A24; --surface-2:#18232F;
+  --ink:#E4EBF3; --ink-2:#A6B4C4; --ink-3:#728296;
+  --rule:#22303E; --rule-strong:#33465A;
+  --steel:#79ADD9; --steel-soft:#14273A;
+  --defect:#FF7358; --defect-soft:#2E1510;
+  --bloat:#DCA53F; --bloat-soft:#2B2110;
+  --go:#5FC79A; --go-soft:#0F2A20;
+  --ritual:#8395A9; --ritual-soft:#1A222C;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px -14px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:"Source Serif 4",Georgia,serif;font-size:16px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+h1,h2,h3,.ui{font-family:Archivo,"Helvetica Neue",Arial,sans-serif}
+
+/* masthead */
+.mast{border-bottom:1px solid var(--rule);background:linear-gradient(180deg,var(--surface),var(--ground));padding:clamp(2.4rem,6vw,4rem) 0 0;position:relative;overflow:hidden}
+.mast::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(var(--rule) 1px,transparent 1px),linear-gradient(90deg,var(--rule) 1px,transparent 1px);
+  background-size:40px 40px;opacity:.32;
+  mask-image:linear-gradient(180deg,rgba(0,0,0,.5),transparent 72%);
+  -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,.5),transparent 72%)}
+.mast .wrap{position:relative}
+.tag{display:inline-block;font-family:Archivo,sans-serif;font-size:.68rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--steel);background:var(--steel-soft);border:1px solid color-mix(in srgb,var(--steel) 30%,transparent);padding:.32rem .66rem;border-radius:2px;margin-bottom:1.2rem}
+h1{font-size:clamp(2.2rem,6vw,3.6rem);font-weight:800;line-height:.96;letter-spacing:-.03em;margin:0}
+.dek{font-size:1.06rem;color:var(--ink-2);margin:1.1rem 0 0;max-width:44em}
+
+.totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--rule);border-top:1px solid var(--rule);margin-top:2.4rem}
+.tot{background:var(--ground);padding:1.2rem 0 1.4rem}
+.tot .v{font-family:Archivo,sans-serif;font-weight:800;font-size:clamp(1.5rem,3.4vw,2.1rem);line-height:1;letter-spacing:-.035em;font-variant-numeric:tabular-nums}
+.tot .k{font-family:Archivo,sans-serif;font-size:.66rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-top:.45rem;line-height:1.35}
+.tot.red .v{color:var(--defect)} .tot.go .v{color:var(--go)} .tot.steel .v{color:var(--steel)}
+@media(min-width:640px){.tot{padding-left:1.2rem}.tot:first-child{padding-left:0}}
+
+/* progress */
+.prog{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:1rem 0 1.2rem;border-top:1px solid var(--rule);margin-top:2rem}
+.prog-txt{font-family:"IBM Plex Mono",monospace;font-size:.76rem;color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.prog-bar{flex:1 1 200px;height:6px;background:var(--surface-2);border:1px solid var(--rule);border-radius:99px;overflow:hidden;min-width:140px}
+.prog-fill{height:100%;width:0;background:var(--go);transition:width .3s ease}
+.reset{font-family:Archivo,sans-serif;font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);background:none;border:1px solid var(--rule);border-radius:2px;padding:.3rem .6rem;cursor:pointer}
+.reset:hover{color:var(--ink);border-color:var(--rule-strong)}
+.reset:focus-visible{outline:2px solid var(--steel);outline-offset:2px}
+
+/* groups */
+.grp{padding:2.6rem 0 .6rem;border-top:1px solid var(--rule)}
+.grp:first-of-type{border-top:0}
+.ghead{display:flex;align-items:baseline;gap:.9rem;flex-wrap:wrap;margin-bottom:.45rem}
+.gkey{font-family:"IBM Plex Mono",monospace;font-size:.78rem;font-weight:600;color:var(--steel);font-variant-numeric:tabular-nums}
+h2{font-size:clamp(1.3rem,2.8vw,1.7rem);font-weight:700;letter-spacing:-.02em;margin:0;line-height:1.15}
+.gmeta{font-family:"IBM Plex Mono",monospace;font-size:.74rem;color:var(--ink-3);font-variant-numeric:tabular-nums;margin-left:auto}
+.gsub{color:var(--ink-2);font-size:.98rem;margin:0 0 1.4rem;max-width:60em}
+
+/* cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px;align-items:start}
+.card{
+  background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--ritual);
+  border-radius:3px;box-shadow:var(--shadow);padding:.85rem .95rem .9rem;
+  display:grid;grid-template-columns:auto 1fr;gap:0 .7rem;transition:opacity .18s ease;
+}
+.card.d{border-left-color:var(--defect)}
+.card.x{border-left-color:var(--bloat)}
+.card.b{border-left-color:var(--steel)}
+.card.k{border-left-color:var(--go)}
+.card input[type=checkbox]{
+  grid-row:1/span 3;width:15px;height:15px;margin:.34rem 0 0;accent-color:var(--go);cursor:pointer;flex:0 0 auto;
+}
+.card input[type=checkbox]:focus-visible{outline:2px solid var(--steel);outline-offset:2px}
+.card.done{opacity:.44}
+.card.done .ct{text-decoration:line-through;text-decoration-thickness:1px}
+.ctop{display:flex;align-items:baseline;gap:.55rem;flex-wrap:wrap;margin-bottom:.2rem}
+.ct{font-family:Archivo,sans-serif;font-weight:700;font-size:.93rem;line-height:1.28;letter-spacing:-.008em;color:var(--ink)}
+.cb{font-size:.875rem;line-height:1.5;color:var(--ink-2);margin:0}
+.cb code{font-family:"IBM Plex Mono",monospace;font-size:.79em;background:var(--surface-2);border:1px solid var(--rule);border-radius:3px;padding:.06em .3em;word-break:break-word}
+.pill{
+  font-family:"IBM Plex Mono",monospace;font-size:.66rem;font-weight:500;letter-spacing:.02em;
+  padding:.1rem .38rem;border-radius:2px;white-space:nowrap;flex:0 0 auto;
+  color:var(--ritual);background:var(--ritual-soft);border:1px solid color-mix(in srgb,var(--ritual) 26%,transparent);
+}
+.pill.d{color:var(--defect);background:var(--defect-soft);border-color:color-mix(in srgb,var(--defect) 30%,transparent)}
+.pill.x{color:var(--bloat);background:var(--bloat-soft);border-color:color-mix(in srgb,var(--bloat) 30%,transparent)}
+.pill.b{color:var(--steel);background:var(--steel-soft);border-color:color-mix(in srgb,var(--steel) 30%,transparent)}
+.pill.k{color:var(--go);background:var(--go-soft);border-color:color-mix(in srgb,var(--go) 30%,transparent)}
+
+footer{padding:3rem 0 4rem;border-top:1px solid var(--rule);margin-top:2.6rem;color:var(--ink-3);font-size:.86rem}
+footer p{max-width:64ch;margin:0 0 .8rem}
+footer b{color:var(--ink)}
+footer a{color:var(--steel)}
+</style>
+
+<header class="mast">
+  <div class="wrap">
+    <div class="tag">Change board · companion to the teardown &amp; rebuild plan</div>
+    <h1>Ratchet Change Board</h1>
+    <p class="dek">Every recommendation from both documents, one line each. Ticks are saved in this browser only — nobody else sees them and Claude cannot read them back.</p>
+
+    <div class="totals">
+      <div class="tot red"><div class="v num">20</div><div class="k">defects to fix or delete</div></div>
+      <div class="tot"><div class="v num">18,800</div><div class="k">lines to delete</div></div>
+      <div class="tot"><div class="v num">46,000</div><div class="k">words to delete</div></div>
+      <div class="tot steel"><div class="v num">14</div><div class="k">things to build</div></div>
+      <div class="tot go"><div class="v num">9</div><div class="k">things to keep</div></div>
+    </div>
+
+    <div class="prog">
+      <span class="prog-txt" id="ptxt">0 / 0 done</span>
+      <div class="prog-bar"><div class="prog-fill" id="pfill"></div></div>
+      <button class="reset" id="reset" type="button">Clear ticks</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" id="board">
+
+<section class="grp">
+  <div class="ghead"><span class="gkey">A</span><h2>Defects — live and reproduced</h2><span class="gmeta">20 items</span></div>
+  <p class="gsub">Everything here was executed against your working tree. Several are deleted outright by group C rather than repaired — the pill says which.</p>
+  <div class="cards">
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Stop gate fails open at the retry cap</span><span class="pill d">fix</span></div><p class="cb"><code>_allow() { exit 0; }</code> lets the session stop with the definition of done unmet — reproduced as block, block, block, ship with ten failing checks. Delete <code>MAX_STOP_RETRIES</code> entirely; the platform already caps Stop hooks at eight blocks.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Nothing enforces the TDD ordering invariant</span><span class="pill d">build</span></div><p class="cb"><code>SubagentStop</code> blocking only sends the finishing subagent back to work; it cannot stop the parent dispatching <code>developer</code>. The gate has to move to <code>PreToolUse</code> on the <code>Agent</code> tool.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Check 13 is poisoned by the installer</span><span class="pill x">deleted</span></div><p class="cb"><code>approve.sh --init-key</code> writes a ledger line tagged with a never-escalatable rule, and the ledger is append-only by design — so the failure is permanent. Goes away with the escalation subsystem.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Manifest-scope is poisoned by the installer's own files</span><span class="pill d">fix</span></div><p class="cb">All 47 harness files land uncommitted and are reported as scope violations on the first Stop. Either commit them or exempt them, and make <code>.gitignore</code> stack-aware.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">The gate reports files it created itself</span><span class="pill d">fix</span></div><p class="cb"><code>uv.lock</code> and <code>__pycache__/*.pyc</code> are produced by the gate's own test run, then flagged as violations by the same invocation. The generated <code>.gitignore</code> covers neither, nor <code>node_modules/</code>.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">The generic stack can never close a milestone</span><span class="pill d">fix</span></div><p class="cb"><code>proof_map</code> returns SKIP with no collector and <code>check_done</code> converts that into a hard FAIL. Every unpacked language and every monorepo is non-shippable, despite the README promising a loud skip.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Every non-Python project silently runs pytest</span><span class="pill d">fix</span></div><p class="cb">Neither installer writes <code>stack/active</code>, so the runtime always falls back to <code>python-pytest</code>. A node repo records <code>node-jest</code> in metadata and runs <code>python3 -m pytest -q</code> at the gate.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">The word "true" anywhere disables three gates</span><span class="pill d">fix</span></div><p class="cb"><code>stop_hook_active</code> is substring-matched, and the payload always carries <code>cwd</code> and <code>transcript_path</code>. Use <code>jq</code> — every one of the three files already calls it in the next function.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Force-push to base is allowed by a missing colon</span><span class="pill x">to deny[]</span></div><p class="cb"><code>+*:*</code> needs a colon, so <code>git push origin +main</code> defeats a rule classified never-escalatable. <code>deny[]</code> already covers the whole family correctly.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Domain laws 3–6 reach zero of twelve agents</span><span class="pill d">fix</span></div><p class="cb">The installer substitutes <code>{{MARKER}}</code>; <code>_LAWS.md</code> specifies <code>&lt;!-- DOMAIN_LAW_n --&gt;</code>. All three layers of verification miss it, including the test that compares the twelve copies to each other.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Exported <code>REPO_ROOT</code> leaks into the test sandbox</span><span class="pill d">fix</span></div><p class="cb">It outranks the suite's own <code>CLAUDE_PROJECT_DIR</code> pin, so session-start's probe runs the gates against the live repo and writes run state into it. Resolve state from one anchor that children cannot inherit.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">The session-start probe "heals" by breaking further</span><span class="pill x">deleted</span></div><p class="cb">It reports the control layer broken, then goes green because the <code>stop-lastfail</code> file it wrote triggers the fail-open path. Drop the self-probe from session start.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">No WIN row's verify command is ever executed</span><span class="pill d">build</span></div><p class="cb">One line tests the cell for non-emptiness against a three-item denylist, so <code>false</code> passes and so does the doctrine's own example of an invalid row. The gate must run the command and write the evidence.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">MILESTONES.md and contracts.md are never reconciled</span><span class="pill d">build</span></div><p class="cb">A row present in the human's file and absent from the agent-written table passes with zero tests, while the gate prints "≥1 test per row." Move the selector into the human's file.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">The installer rewrites hook source code</span><span class="pill x">deleted</span></div><p class="cb"><code>.claude/hooks</code> is in the substitution roots, so any hook containing a <code>{{MARKER}}</code> string literal gets silently rewritten. Already broke two lines in <code>test_hooks.py</code>.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">The quickstart's own M0 cannot pass the ship gate</span><span class="pill d">fix</span></div><p class="cb">Grep rows are called "the best WIN rows there are," and <code>proof_map</code> fails any row collecting zero tests. Add a per-row <code>selects: —</code> exemption.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Four <code>Read()</code> denies have no <code>Edit()</code> twin</span><span class="pill d">fix</span></div><p class="cb"><code>NotebookEdit</code> is not covered on those paths, including the escalation key. Low severity, one-line fix — the other 74 entries are correct.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>settings.template.json</code> is denied but never shipped</span><span class="pill d">fix</span></div><p class="cb">The generated config denies edits to a file that does not exist in the target, and its own warning tells the user to edit it. Dead entries plus a false instruction.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">Two conflicting entry-point prompts</span><span class="pill d">build</span></div><p class="cb">The installer prints one paste-this prompt and <code>QUICKSTART.md</code> prints a different one. Replaced by the <code>ratchet-run</code> skill.</p></div></div>
+
+    <div class="card d"><input type="checkbox"><div><div class="ctop"><span class="ct">The bundle ships test residue with live run tokens</span><span class="pill d">fix</span></div><p class="cb">34 files under <code>harness/.pipeline/</code> including a ledger with real run tokens and target hashes — exactly what the <code>.gitignore</code> header says must never ship. A gitignore entry does not untrack files.</p></div></div>
+
+  </div>
+</section>
+
+<section class="grp">
+  <div class="ghead"><span class="gkey">B</span><h2>Prove before deleting — phase 0</h2><span class="gmeta">4 items · 1 day</span></div>
+  <p class="gsub">Undocumented behaviour the current design assumed. A throwaway repo, four hooks, no doctrine.</p>
+  <div class="cards">
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Find the <code>Agent</code> tool's target field</span><span class="pill b">prove</span></div><p class="cb">Which <code>tool_input</code> key names the subagent being dispatched is not documented. Dump stdin from a no-op <code>PreToolUse</code> hook under <code>claude --debug</code>.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Confirm <code>if: "Agent(developer)"</code> filters</span><span class="pill b">prove</span></div><p class="cb">It composes two documented facts but is never shown together in the docs, and <code>if</code> is explicitly best-effort. Re-check <code>tool_input</code> inside the script regardless.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Test <code>SubagentStop</code> on an errored subagent</span><span class="pill b">prove</span></div><p class="cb">If it does not fire, a stale red token outlives an aborted test-writer. Timestamp the token and expire it either way.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Test the matchers under <code>claude -p</code></span><span class="pill b">prove</span></div><p class="cb">Headless and CI runs are where frontmatter hooks are silently dead. Confirm the settings-file placement survives.</p></div></div>
+
+  </div>
+</section>
+
+<section class="grp">
+  <div class="ghead"><span class="gkey">C</span><h2>Delete — phase 1</h2><span class="gmeta">15 items · ~18,800 LOC + ~46,000 words</span></div>
+  <p class="gsub">One commit, pure subtraction. The tree is allowed to be broken at the end of this — it does not work today anyway.</p>
+  <div class="cards">
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">All PowerShell</span><span class="pill x">−4,496</span></div><p class="cb"><code>install.ps1</code> hard-requires bash 4+, so every machine it can run on can run the shell version. Takes 13 measured drift defects with it.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">The whole escalation subsystem</span><span class="pill x">−3,199</span></div><p class="cb">HMAC, TTL, run-binding, single-use twice, and a postcondition, so a human can approve their own agent while sitting at the terminal. The agent prints the command; the human runs it.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>install.sh</code></span><span class="pill x">−2,190</span></div><p class="cb">304 lines of terminal graphics — braille spinner, three-tier colour model, ASCII wordmark — against 186 lines that copy files. Replaced by a ~30-line bootstrap.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>ratchet-update.sh</code></span><span class="pill x">−1,477</span></div><p class="cb">A hand-rolled <code>git diff</code>, <code>status</code> and <code>checkout</code>, running inside a repo the installer already verified is a git repo. Replacement: <code>git pull</code>.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>ratchet-dependencies.sh</code></span><span class="pill x">−1,009</span></div><p class="cb">Eight package managers to check that four tools exist, and one of the eight installs nothing. One README line per platform.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">Embedded <code>--selftest</code> blocks</span><span class="pill x">−2,090</span></div><p class="cb">26 files each carrying a private test framework, alongside a 5,191-line suite. One normal test file replaces all of it.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>run_metrics.py</code> and <code>check_narrative.py</code></span><span class="pill x">−2,048</span></div><p class="cb">10 of 27 counters are wired to events nothing emits, making 9 of 13 contradiction rules unreachable; the other is a word counter that fires on correct prose. <code>proof_map</code> returns in phase 3.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">17 of 19 <code>check_done.py</code> checks</span><span class="pill x">−1,600</span></div><p class="cb">They audit the harness's paperwork, not the code. Manifest scope and verify-matches-HEAD survive into the Stop gate.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">Most of <code>guard.sh</code> and <code>scope-guard.sh</code></span><span class="pill x">−1,010</span></div><p class="cb">Path, secret and push rules move to <code>deny[]</code>, where they are stricter and cannot be tokenizer-fooled. ~150 lines of genuinely non-expressible policy remain.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">Every <code>docs/*.md</code> and <code>BUILD-NOTES.md</code></span><span class="pill x">−27,174 w</span></div><p class="cb">Eleven point-in-time reports on states of the tree that no longer exist, none of which ever ships to a user. Git history holds them.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">The learning-loop scaffolding</span><span class="pill x">−6,589 w</span></div><p class="cb">10,460 words of machinery holding 585 words of lessons, all imported from a different project, with zero retros ever written. Keep the 61 lines of actual lessons.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">Six of twelve agent seats</span><span class="pill x">−12,000 w</span></div><p class="cb">Four critics doing one job, plus a scribe and a humanizer whose output is forbidden as evidence. The lens becomes a task-message parameter.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">Every <code>## Failure modes</code> and <code>## Who checks you</code> section</span><span class="pill x">−1,940 w</span></div><p class="cb">Intra-file restatement of rules the same file gave in prose forty lines earlier, plus cross-references between prompts that never share a context.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">All ritual artifacts with no reader</span><span class="pill x">−9 files</span></div><p class="cb"><code>gap-analysis.md</code>, <code>contracts.md</code>, <code>context.md</code>, <code>research.md</code>, the edge-case ledger, all FAST checkpoints, and the recap. Zero hook references between them.</p></div></div>
+
+    <div class="card x"><input type="checkbox"><div><div class="ctop"><span class="ct">Dead knobs, rules and IDs</span><span class="pill x">cleanup</span></div><p class="cb">Four config knobs with no readers, 16 of 42 rule IDs nothing emits, and <code>SECRETS_SCAN_CMD</code>/<code>DEP_AUDIT_CMD</code> which no gate has ever executed. Also <code>DEC-001</code>, which ships a fabricated <code>Simulated.</code> line.</p></div></div>
+
+  </div>
+</section>
+
+<section class="grp">
+  <div class="ghead"><span class="gkey">D</span><h2>Build — phases 2 to 4</h2><span class="gmeta">14 items · ~4 days</span></div>
+  <p class="gsub">Written fresh against the phase-0 spike, not edited down from the survivors. Target: six hooks, ~480 lines.</p>
+  <div class="cards">
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>sequence-gate.sh</code> — the missing gate</span><span class="pill b">~40 LOC</span></div><p class="cb"><code>PreToolUse</code> on <code>Agent</code>, refusing a developer dispatch with no valid red token. The only lifecycle point that can refuse a dispatch, and unbypassable in every permission mode.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Merge the two subagent gates</span><span class="pill b">~90 LOC</span></div><p class="cb"><code>red-gate.sh</code> and <code>subagent-gate.sh</code> are 68% byte-identical with ten duplicated functions. One file, <code>--mode red|green</code>.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Rewrite the Stop gate</span><span class="pill b">~90 LOC</span></div><p class="cb">Run verify, check scope, block with the failure text. It never exits 0 while done is unmet.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Move path, secret and push rules to <code>deny[]</code></span><span class="pill b">config</span></div><p class="cb">The permission system is the security model; hooks are only for what it cannot express. Deleting the bash copy makes the guarantee stronger.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">One state anchor</span><span class="pill b">config</span></div><p class="cb">Resolve from <code>CLAUDE_PROJECT_DIR</code>, never inherit from the environment. This is the root cause of the session-start leak.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Stack packs down to four variables</span><span class="pill b">~25 LOC</span></div><p class="cb">Verify, fast, scoped, and a test-path regex — bound by a marker file the bootstrap actually writes. A new language stays one file, and this time the claim is true.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>CONTRACT.md</code> replaces SPEC + MILESTONES</span><span class="pill b">1 file</span></div><p class="cb">Shipped with headers and a worked row already in place, not a pointer to a 4,473-word guide. Every field gets a named reader.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">The gate runs verify and writes evidence</span><span class="pill b">inversion</span></div><p class="cb">Today the agent writes its own evidence and nothing runs the command. An agent that writes its own evidence is not evidence.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct"><code>proof_map</code> reads <code>CONTRACT.md</code></span><span class="pill b">rewire</span></div><p class="cb">The derive-don't-enumerate design is right; it is reading the wrong file. Moving it off agent scratch closes the reconciliation hole by not having one.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Six agent prompts at ~250 words</span><span class="pill b">−90%</span></div><p class="cb">Identity, inputs by path, output shape, the three rules a hook does not enforce, and the stop condition. Nothing else changes behaviour.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">One critic definition, N dispatches</span><span class="pill b">−5,300 w</span></div><p class="cb">The harness's own rule is that independence comes from a fresh context, not a separate file. The lens goes in the task message.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">The <code>ratchet-run</code> skill</span><span class="pill b">new</span></div><p class="cb">The orchestrator becomes a versioned artifact with a name — <code>/ratchet:run M0</code> — instead of a prompt the installer prints. Pair it with <code>ratchet-contract</code> for the interview.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">One test file, six hooks, real payloads</span><span class="pill b">test</span></div><p class="cb">It drives the hooks and does not test the naming regex against itself. Every seeded lesson's named assert must actually execute — four currently skip.</p></div></div>
+
+    <div class="card b"><input type="checkbox"><div><div class="ctop"><span class="ct">Package as a plugin</span><span class="pill b">1 day</span></div><p class="cb">Marketplace manifest, version pin, <code>claude plugin validate --strict</code>. A teammate gets the harness by trusting the repo; no installer runs.</p></div></div>
+
+  </div>
+</section>
+
+<section class="grp">
+  <div class="ghead"><span class="gkey">E</span><h2>Keep — this is the product</h2><span class="gmeta">9 items</span></div>
+  <p class="gsub">The roughly 6% worth defending. Protect these explicitly during the cut.</p>
+  <div class="cards">
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">The four-directory ownership partition</span><span class="pill k">keep</span></div><p class="cb">One owner per directory, enforced by a permission boundary rather than a promise. State it once, not in six documents.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">Mechanical proof that tests were red first</span><span class="pill k">keep</span></div><p class="cb">The best control in the system and rare to see done properly. It just needs the sequencing half added at <code>PreToolUse</code>.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">The deny list</span><span class="pill k">keep</span></div><p class="cb">78 entries, every <code>Write()</code> deny correctly twinned with an <code>Edit()</code> — the mistake most hand-written configs make. Better built than the bash that duplicates it.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">The five-field WIN row</span><span class="pill k">keep</span></div><p class="cb">Id, name, requirement, command, evidence is the right shape. It only needs something to run the third field.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">"A WIN row without a verify command is a setup defect"</span><span class="pill k">keep</span></div><p class="cb">The sharpest sentence in 80,250 words, and the rule that makes autonomous delivery decidable at all.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">The <code>ratchet:unwritten</code> marker</span><span class="pill k">keep</span></div><p class="cb">The one placeholder in the tree that does mechanical work — a one-way, un-reopenable bootstrap gate enforced by state rather than promise.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">Manifest scope enforcement</span><span class="pill k">keep</span></div><p class="cb">"Changed files ⊆ the plan" is state-dependent policy that no deny rule can express. Genuinely earns its hook.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">The agent cannot edit its own guardrails</span><span class="pill k">keep</span></div><p class="cb">Right instinct. Enforce it with <code>deny[]</code> and file permissions rather than 4,008 lines of string matching.</p></div></div>
+
+    <div class="card k"><input type="checkbox"><div><div class="ctop"><span class="ct">The ten seeded lessons</span><span class="pill k">keep</span></div><p class="cb">Specific, evidenced and test-bound — genuinely good work. Keep the 61 lines; drop the apparatus around them until a real run produces one.</p></div></div>
+
+  </div>
+</section>
+
+<section class="grp">
+  <div class="ghead"><span class="gkey">F</span><h2>The brake — so it does not re-inflate</h2><span class="gmeta">6 rules</span></div>
+  <p class="gsub">Cutting is the easy half. The pressure that produced 34,000 lines is still there unless what scores changes.</p>
+  <div class="cards">
+
+    <div class="card"><input type="checkbox"><div><div class="ctop"><span class="ct">No markdown ships without a code reader</span><span class="pill">rule</span></div><p class="cb">If no hook parses it, it is a comment, and comments live next to the code they explain. This one rule deletes nine ritual artifacts before anyone argues about them.</p></div></div>
+
+    <div class="card"><input type="checkbox"><div><div class="ctop"><span class="ct">A gate asserts an exit code, never a file's existence</span><span class="pill">rule</span></div><p class="cb">Every check that passes because a file exists, or because its last line reads <code>CLEAR</code>, is deleted or converted. A check that cannot fail is not a check.</p></div></div>
+
+    <div class="card"><input type="checkbox"><div><div class="ctop"><span class="ct">Done is a green verify and a merged PR</span><span class="pill">rule</span></div><p class="cb">Not a filed retro, not a consolidated lessons doc, not nineteen passing paperwork audits.</p></div></div>
+
+    <div class="card"><input type="checkbox"><div><div class="ctop"><span class="ct">One statement, one home</span><span class="pill">rule</span></div><p class="cb">A rule stated twice will drift. Eight mutually incompatible test counts across the shipped docs — three in one file — are this failing in public.</p></div></div>
+
+    <div class="card"><input type="checkbox"><div><div class="ctop"><span class="ct">A budget, enforced at review</span><span class="pill">rule</span></div><p class="cb">Hooks ≤ 800 LOC, prompts ≤ 2,500 words, one README. Exceeding any of them is a design conversation, not a commit.</p></div></div>
+
+    <div class="card"><input type="checkbox"><div><div class="ctop"><span class="ct">Do not let the harness audit the harness again</span><span class="pill">rule</span></div><p class="cb">Four accurate self-diagnoses became four more documents in <code>docs/</code> and nothing changed. The next assessment is a milestone closing, not a report saying it would.</p></div></div>
+
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><b>Order of operations:</b> group B first (one day, proves the architecture), then C in a single commit, then D. A is mostly resolved by C — only seven of the twenty defects need a deliberate fix once the deletions land.</p>
+    <p>Companions: <a href="https://claude.ai/code/artifact/e114e42b-7eb9-4303-82d6-38636b33a1b2">the teardown</a> for the evidence behind each item, and <a href="https://claude.ai/code/artifact/58303d93-2015-4ddc-9109-867d62df6140">the rebuild plan</a> for phase detail and the decision record.</p>
+    <p style="margin-top:1.6rem;font-family:'IBM Plex Mono',monospace;font-size:.76rem;line-height:1.7">Ticks are stored in this browser only. They are not shared with anyone, do not sync between devices, and Claude cannot read them.</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var KEY='ratchet-board-v1';
+  var boxes=[].slice.call(document.querySelectorAll('.card input[type=checkbox]'));
+  var fill=document.getElementById('pfill'), txt=document.getElementById('ptxt');
+
+  boxes.forEach(function(b,i){
+    b.id='chk'+i;
+    b.setAttribute('aria-label', (b.parentNode.querySelector('.ct')||{}).textContent || 'item '+(i+1));
+  });
+
+  function load(){
+    try{ return JSON.parse(localStorage.getItem(KEY)||'[]')||[]; }catch(e){ return []; }
+  }
+  function save(){
+    try{ localStorage.setItem(KEY, JSON.stringify(boxes.map(function(b){return b.checked?1:0}))); }catch(e){}
+  }
+  function paint(){
+    var n=0;
+    boxes.forEach(function(b){
+      b.parentNode.classList.toggle('done', b.checked);
+      if(b.checked) n++;
+    });
+    var pct = boxes.length ? (n/boxes.length*100) : 0;
+    fill.style.width = pct.toFixed(1)+'%';
+    txt.textContent = n+' / '+boxes.length+' done';
+  }
+
+  var saved=load();
+  boxes.forEach(function(b,i){ b.checked = saved[i]===1; });
+  paint();
+
+  boxes.forEach(function(b){
+    b.addEventListener('change', function(){ save(); paint(); });
+  });
+
+  document.getElementById('reset').addEventListener('click', function(){
+    boxes.forEach(function(b){ b.checked=false; });
+    save(); paint();
+  });
+})();
+</script>

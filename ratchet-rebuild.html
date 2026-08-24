@@ -1,0 +1,665 @@
+<title>Ratchet Rebuild</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+
+<style>
+:root{
+  --ground:#F2F5F8; --surface:#FFFFFF; --surface-2:#E7ECF2;
+  --ink:#0E1620; --ink-2:#3C4A5C; --ink-3:#6A798D;
+  --rule:#CFD8E2; --rule-strong:#A9B7C7;
+  --steel:#1B4B76; --steel-soft:#E2EBF4;
+  --defect:#C22715; --defect-soft:#FBE8E4;
+  --bloat:#8F5D00; --bloat-soft:#FAEFD8;
+  --ritual:#556477; --ritual-soft:#E6EAF0;
+  --go:#1D6B4F; --go-soft:#DFF0E8;
+  --shadow:0 1px 2px rgba(14,22,32,.05), 0 8px 24px -16px rgba(14,22,32,.28);
+  --measure:70ch;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0A1017; --surface:#111A24; --surface-2:#18232F;
+    --ink:#E4EBF3; --ink-2:#A6B4C4; --ink-3:#728296;
+    --rule:#22303E; --rule-strong:#33465A;
+    --steel:#79ADD9; --steel-soft:#14273A;
+    --defect:#FF7358; --defect-soft:#2E1510;
+    --bloat:#DCA53F; --bloat-soft:#2B2110;
+    --ritual:#8395A9; --ritual-soft:#1A222C;
+    --go:#5FC79A; --go-soft:#0F2A20;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0A1017; --surface:#111A24; --surface-2:#18232F;
+  --ink:#E4EBF3; --ink-2:#A6B4C4; --ink-3:#728296;
+  --rule:#22303E; --rule-strong:#33465A;
+  --steel:#79ADD9; --steel-soft:#14273A;
+  --defect:#FF7358; --defect-soft:#2E1510;
+  --bloat:#DCA53F; --bloat-soft:#2B2110;
+  --ritual:#8395A9; --ritual-soft:#1A222C;
+  --go:#5FC79A; --go-soft:#0F2A20;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"Source Serif 4",Georgia,"Times New Roman",serif;
+  font-size:18px; line-height:1.62; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:0 28px}
+.col{max-width:720px}
+.plate{max-width:1004px}
+
+h1,h2,h3,h4,.ui{font-family:Archivo,"Helvetica Neue",Arial,sans-serif}
+h1{font-size:clamp(2.6rem,7vw,4.4rem);font-weight:800;line-height:.94;letter-spacing:-.03em;margin:0;text-wrap:balance}
+h2{font-size:clamp(1.5rem,3.4vw,2.05rem);font-weight:700;line-height:1.12;letter-spacing:-.02em;margin:0 0 .5rem;text-wrap:balance}
+h3{font-size:1.12rem;font-weight:700;line-height:1.3;margin:2.4rem 0 .55rem;text-wrap:balance}
+h4{font-size:.95rem;font-weight:700;margin:1.6rem 0 .4rem;letter-spacing:-.005em}
+p{margin:0 0 1.05rem;max-width:var(--measure)}
+strong{font-weight:600;color:var(--ink)}
+a{color:var(--steel);text-decoration-thickness:1px;text-underline-offset:2px}
+a:focus-visible{outline:2px solid var(--steel);outline-offset:3px;border-radius:2px}
+code,.f,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+code{font-size:.83em;background:var(--surface-2);color:var(--ink-2);padding:.1em .34em;border-radius:3px;border:1px solid var(--rule);word-break:break-word}
+.f{font-size:.79rem}
+.num{font-variant-numeric:tabular-nums}
+
+.mast{
+  border-bottom:1px solid var(--rule);
+  background:linear-gradient(180deg,var(--surface) 0%,var(--ground) 100%);
+  padding:clamp(3rem,8vw,5.5rem) 0 0; position:relative; overflow:hidden;
+}
+.mast::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(var(--rule) 1px,transparent 1px),linear-gradient(90deg,var(--rule) 1px,transparent 1px);
+  background-size:44px 44px;opacity:.35;
+  mask-image:linear-gradient(180deg,rgba(0,0,0,.5),transparent 70%);
+  -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,.5),transparent 70%);
+}
+.mast .wrap{position:relative}
+.tag{
+  display:inline-flex;align-items:center;gap:.5rem;font-family:Archivo,sans-serif;
+  font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--steel);background:var(--steel-soft);
+  border:1px solid color-mix(in srgb,var(--steel) 30%,transparent);
+  padding:.34rem .7rem;border-radius:2px;margin-bottom:1.4rem;
+}
+.dek{font-size:clamp(1.12rem,2.2vw,1.34rem);color:var(--ink-2);margin:1.5rem 0 0;max-width:36em;line-height:1.5}
+.byline{font-family:"IBM Plex Mono",monospace;font-size:.76rem;color:var(--ink-3);margin:2.2rem 0 0;padding-top:1.1rem;border-top:1px solid var(--rule);max-width:var(--measure)}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;background:var(--rule);border-top:1px solid var(--rule);margin-top:clamp(2.6rem,6vw,4rem)}
+.stat{background:var(--ground);padding:1.5rem 0 1.7rem}
+.stat .v{font-family:Archivo,sans-serif;font-weight:800;font-size:clamp(1.9rem,4.2vw,2.6rem);line-height:1;letter-spacing:-.035em;font-variant-numeric:tabular-nums}
+.stat .k{font-family:Archivo,sans-serif;font-size:.7rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-top:.5rem;line-height:1.35;max-width:17em}
+.stat.red .v{color:var(--defect)}
+.stat.go .v{color:var(--go)}
+@media(min-width:640px){.stat{padding-left:1.4rem}.stat:first-child{padding-left:0}}
+
+section{padding:clamp(3.2rem,7vw,5rem) 0;border-bottom:1px solid var(--rule)}
+section:last-of-type{border-bottom:0}
+.shead{display:flex;gap:1.1rem;align-items:baseline;margin-bottom:1.6rem}
+.snum{font-family:"IBM Plex Mono",monospace;font-size:.8rem;font-weight:600;color:var(--steel);padding-top:.35rem;flex:0 0 auto;font-variant-numeric:tabular-nums}
+.lede{font-size:1.14rem;color:var(--ink-2);line-height:1.55}
+
+.ev{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--ritual);border-radius:3px;margin:1.8rem 0;box-shadow:var(--shadow);overflow:hidden}
+.ev.defect{border-left-color:var(--defect)}
+.ev.go{border-left-color:var(--go)}
+.ev-head{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:center;padding:.75rem 1.1rem;border-bottom:1px solid var(--rule);background:var(--surface-2)}
+.chip{font-family:Archivo,sans-serif;font-size:.63rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;padding:.22rem .5rem;border-radius:2px;white-space:nowrap;color:var(--ritual);background:var(--ritual-soft);border:1px solid color-mix(in srgb,var(--ritual) 28%,transparent)}
+.chip.defect{color:var(--defect);background:var(--defect-soft);border-color:color-mix(in srgb,var(--defect) 32%,transparent)}
+.chip.go{color:var(--go);background:var(--go-soft);border-color:color-mix(in srgb,var(--go) 32%,transparent)}
+.ev-title{font-family:Archivo,sans-serif;font-weight:700;font-size:.95rem;color:var(--ink);flex:1 1 240px}
+.ev-body{padding:1.1rem}
+.ev-body>p{margin-bottom:.75rem;font-size:.98rem}
+.ev-body>p:last-child{margin-bottom:0}
+.src{font-family:"IBM Plex Mono",monospace;font-size:.72rem;color:var(--ink-3);white-space:nowrap}
+pre{margin:0;padding:.95rem 1.1rem;overflow-x:auto;background:var(--surface-2);border-top:1px solid var(--rule);font-family:"IBM Plex Mono",monospace;font-size:.79rem;line-height:1.65;color:var(--ink-2);tab-size:2}
+pre b{color:var(--defect);font-weight:600}
+pre i{color:var(--ink-3);font-style:normal}
+pre em{color:var(--steel);font-style:normal;font-weight:500}
+pre u{color:var(--go);text-decoration:none;font-weight:600}
+
+blockquote{margin:1.4rem 0;padding:.15rem 0 .15rem 1.1rem;border-left:2px solid var(--rule-strong);color:var(--ink-2);font-style:italic;max-width:var(--measure)}
+blockquote p{margin:0 0 .5rem}
+blockquote p:last-child{margin:0}
+blockquote cite{display:block;font-style:normal;font-family:"IBM Plex Mono",monospace;font-size:.71rem;color:var(--ink-3);margin-top:.45rem}
+
+.tw{overflow-x:auto;margin:1.8rem 0;border:1px solid var(--rule);border-radius:3px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:600px;font-size:.86rem}
+th,td{text-align:left;padding:.66rem .9rem;border-bottom:1px solid var(--rule);vertical-align:top}
+thead th{font-family:Archivo,sans-serif;font-size:.66rem;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+td.n{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:.8rem}
+td.cut{font-family:Archivo,sans-serif;font-weight:700;color:var(--defect);font-variant-numeric:tabular-nums;white-space:nowrap}
+td.keep{font-family:Archivo,sans-serif;font-weight:700;color:var(--go);white-space:nowrap}
+td.new{font-family:Archivo,sans-serif;font-weight:700;color:var(--steel);white-space:nowrap}
+
+ul.tight{margin:.5rem 0 1.2rem;padding-left:1.1rem;max-width:var(--measure)}
+ul.tight li{margin-bottom:.42rem}
+ul.tight li::marker{color:var(--ink-3)}
+ol.rank{margin:1rem 0 1.2rem;padding-left:0;list-style:none;counter-reset:r;max-width:var(--measure)}
+ol.rank li{counter-increment:r;position:relative;padding-left:2.3rem;margin-bottom:.7rem}
+ol.rank li::before{content:counter(r,decimal-leading-zero);position:absolute;left:0;top:.18em;font-family:"IBM Plex Mono",monospace;font-size:.75rem;font-weight:600;color:var(--steel)}
+
+.claim{font-family:Archivo,sans-serif;font-weight:700;font-size:clamp(1.15rem,2.6vw,1.5rem);line-height:1.3;letter-spacing:-.018em;color:var(--ink);margin:2rem 0;padding-left:1.1rem;border-left:3px solid var(--steel);max-width:24em;text-wrap:balance}
+.claim.red{border-left-color:var(--defect)}
+
+/* phases */
+.phase{
+  display:grid; grid-template-columns:auto 1fr; gap:0 1.4rem;
+  border-left:2px solid var(--rule); padding:0 0 2.2rem 0; margin-left:.6rem;
+  position:relative;
+}
+.phase:last-child{border-left-color:transparent}
+.pnum{
+  grid-row:1/span 3; margin-left:-1.6rem; width:2.9rem; height:2.9rem; flex:0 0 auto;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--surface); border:1px solid var(--rule-strong); border-radius:50%;
+  font-family:Archivo,sans-serif; font-weight:800; font-size:.9rem; color:var(--steel);
+  font-variant-numeric:tabular-nums;
+}
+.ptitle{font-family:Archivo,sans-serif;font-weight:700;font-size:1.16rem;letter-spacing:-.015em;padding-top:.42rem;display:flex;flex-wrap:wrap;gap:.7rem;align-items:baseline}
+.pcost{font-family:"IBM Plex Mono",monospace;font-size:.72rem;font-weight:400;color:var(--ink-3);white-space:nowrap}
+.pbody{padding-top:.5rem}
+.pbody p{font-size:.98rem;margin-bottom:.7rem}
+.pbody ul.tight{font-size:.95rem;margin-top:.3rem}
+.exit{
+  margin-top:.9rem; padding:.7rem .9rem; background:var(--go-soft);
+  border:1px solid color-mix(in srgb,var(--go) 28%,transparent); border-radius:3px;
+  font-family:"IBM Plex Mono",monospace; font-size:.78rem; line-height:1.6; color:var(--ink-2);
+}
+.exit b{font-family:Archivo,sans-serif;font-size:.63rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--go);display:block;margin-bottom:.3rem}
+
+.shape{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:1.2rem 1.3rem;overflow-x:auto;box-shadow:var(--shadow);margin:1.8rem 0}
+.shape pre{background:none;border:0;padding:0;font-size:.8rem;line-height:1.85}
+.shape pre b{color:var(--ink);font-weight:600}
+.shape pre i{color:var(--ink-3);font-style:normal}
+.shape pre em{color:var(--steel);font-style:normal;font-weight:500}
+.shape pre u{color:var(--go);text-decoration:none;font-weight:600}
+
+footer{padding:3rem 0 4.5rem;color:var(--ink-3);font-size:.9rem}
+footer .kicker{font-family:Archivo,sans-serif;font-weight:700;color:var(--ink);font-size:clamp(1.2rem,3vw,1.7rem);line-height:1.25;letter-spacing:-.02em;margin:0 0 1.2rem;max-width:22em;text-wrap:balance}
+footer p{max-width:var(--measure)}
+</style>
+
+<header class="mast">
+  <div class="wrap">
+    <div class="tag">Rebuild plan · companion to the teardown</div>
+    <h1>Ratchet<br>Rebuild</h1>
+    <p class="dek">You asked to revert to what we should have built. Git says there is nothing to revert to — the first commit was already 66 files, and all twenty commits since are the harness maintaining the harness. So this is a rebuild. That is good news: nothing in the tree has ever shipped anything, so nothing in it is load-bearing.</p>
+    <p class="byline">Findings below are new since the teardown. Every defect marked <b>reproduced</b> was executed against your working tree, including a full 210-test suite run and a cold install into a scratch repo.</p>
+
+    <div class="stats">
+      <div class="stat"><div class="v num">20</div><div class="k">commits. none add a capability for a user of the harness</div></div>
+      <div class="stat red"><div class="v num">3</div><div class="k">gate failures that are permanent on a clean install</div></div>
+      <div class="stat red"><div class="v num">0</div><div class="k">mechanisms enforcing the ordering invariant the product is named for</div></div>
+      <div class="stat go"><div class="v num">~480</div><div class="k">lines of hook code in the target shape</div></div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap">
+    <div class="shead"><span class="snum">00</span><div class="col">
+      <h2>There is no revert point</h2>
+      <p class="lede">I looked for the version before this got out of hand. It doesn't exist. The repo is three days old and was born at 66 files.</p>
+    </div></div>
+
+    <div class="plate">
+      <div class="tw"><table>
+        <thead><tr><th>Date</th><th>Files</th><th>Commit</th></tr></thead>
+        <tbody>
+          <tr><td class="n">08-20</td><td class="n">66</td><td>Initial Commit for Self Learning Harness</td></tr>
+          <tr><td class="n">08-20</td><td class="n">66</td><td>Version 1.0.1: Added WSL Relay, Improve Probes</td></tr>
+          <tr><td class="n">08-21</td><td class="n">72</td><td>Version 1.1.0: Added dependency installer, changed UI elements, added PoT updater</td></tr>
+          <tr><td class="n">08-21</td><td class="n">76</td><td>Version 1.2.0: Changed the .context template, quick deployment</td></tr>
+          <tr><td class="n">08-22</td><td class="n">76</td><td>Version 1.2.1: Bug fixes for Windows/Linux cases</td></tr>
+          <tr><td class="n">08-22</td><td class="n">76</td><td class="f">check_done.py: fix lesson parser for H3/backtick-assert format</td></tr>
+          <tr><td class="n">08-22</td><td class="n">76</td><td class="f">retro loop: enforce retro+INDEX row (check_done 18/19)</td></tr>
+          <tr><td class="n">08-22</td><td class="n">71</td><td class="f">purge stale .context/ doctrine copies; fix install.sh allowlist</td></tr>
+          <tr><td class="n">08-22</td><td class="n">71</td><td class="f">Implement audit R5 / R8 / R9 / R11 <span class="src">(four commits)</span></td></tr>
+          <tr><td class="n">08-22</td><td class="n">71</td><td class="f">harden lesson parser: bulleted/emphasised asserts</td></tr>
+          <tr><td class="n">08-22</td><td class="n">71</td><td class="f">gate the learning loop's own cadence: retro staleness + consolidation</td></tr>
+          <tr><td class="n">08-22</td><td class="n">71</td><td class="f">run_metrics --trend survives a non-object sidecar</td></tr>
+          <tr><td class="n">08-22</td><td class="n">71</td><td class="f">check_narrative: line caps count like head -n, not split(chr 10)</td></tr>
+          <tr><td class="n">08-22</td><td class="n">71</td><td class="f">hooklib: fold case in DENY matching on the Windows mount</td></tr>
+          <tr><td class="n">08-23</td><td class="n">71</td><td class="f">guard: detect approve.sh by effect, not by a case-sensitive substring</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="col">
+      <p>Fifteen of the last sixteen commits patch the harness's own paperwork parsers: the lesson parser twice, the line counter, the trend reader, the DENY case-folder, the retro cadence gate. Read as a trajectory, this is a system that spent its entire existence servicing itself.</p>
+      <p>So "revert" is off the table, and that removes the hardest part of a rewrite: there is no migration, no users, no data, no compatibility surface. <strong>You can delete 33,000 lines on a Monday and lose nothing that has ever worked.</strong></p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="shead"><span class="snum">01</span><div class="col">
+      <h2>New findings</h2>
+      <p class="lede">Seven, ranked. The first two change the architecture, not just the line count.</p>
+    </div></div>
+
+    <div class="plate">
+      <div class="ev defect">
+        <div class="ev-head"><span class="chip defect">01 · Reproduced</span><span class="ev-title">The stop gate fails open. Block, block, block, ship.</span><span class="src">stop-gate.sh:107, :509, :519</span></div>
+        <div class="ev-body">
+          <p>The Stop hook's terminal paths — retry cap exhausted, and identical-failure-with-unchanged-tree — both call <code>_allow</code>. <code>_allow() { exit 0; }</code>. Exit 0 from a Stop hook means <em>the session is permitted to stop</em>.</p>
+        </div>
+<pre>_allow() { exit 0; }        <i>stop-gate.sh:107</i>
+
+if [ "$n" -ge "$cap" ]; then
+  printf 'ratchet: STOP - the stop gate has blocked %s times...' &gt;&amp;2
+  _event stop_gate_cap_exhausted ...
+  <b>_allow</b>                  <i>← definition of done NOT met</i>
+fi
+
+<i>reproduced at ship tier from a clean install:</i>
+  stop #1 -&gt; BLOCKED
+  stop #2 -&gt; BLOCKED
+  stop #3 -&gt; BLOCKED
+  stop #4 -&gt; <b>*** ALLOWED TO STOP ***</b>
+  failing checks at that moment: gate-artifact, manifest-scope, win-rows,
+  findings-ledger, ship-report, checkpoints, context-current, escalations,
+  recap, retro-filed          <i>← ten of nineteen</i></pre>
+        <div class="ev-body">
+          <p>The message goes to stderr, which the model does not reliably surface. Combined with finding 03 — which makes green unreachable — <strong>every run reaches this cap by construction.</strong> The product's one-line thesis is <em>"the run moves forward or it stops; it never quietly slides back."</em> Its terminal gate quietly slides back on attempt four.</p>
+          <p><strong>The fix is a deletion, not a patch.</strong> Claude Code already caps Stop hooks at eight consecutive blocks and hands control back itself. You do not need <code>MAX_STOP_RETRIES</code> at all. Delete it. If a cap is ever wanted, its exit must be a block carrying a give-up reason — never an allow.</p>
+        </div>
+      </div>
+
+      <div class="ev defect">
+        <div class="ev-head"><span class="chip defect">02 · Architecture</span><span class="ev-title">The TDD ordering invariant is enforced by nothing, and cannot be enforced where you put it</span><span class="src">settings.template.json:280,290</span></div>
+        <div class="ev-body">
+          <p>Good news first: <code>SubagentStop</code> <em>does</em> support an agent-name matcher, and <code>"matcher": "test-writer"</code> is an exact string match. That part of the design is correct and I expected it not to be.</p>
+          <p>The problem is what blocking there does. Per the platform docs, exit 2 on <code>SubagentStop</code> <strong>prevents that subagent from stopping</strong> — it sends the finishing agent back to work. It does not touch the parent's control flow, and it cannot prevent the parent from dispatching <code>developer</code> on its next turn.</p>
+          <p>So <code>red-gate.sh</code> enforces <em>"test-writer must not finish until its tests are red."</em> Useful. It does not enforce, and structurally cannot enforce, <em>"developer must not start until red was proven."</em> That second sentence is the entire TDD claim of the product, and no mechanism in the tree implements it.</p>
+        </div>
+<pre><i>the only lifecycle point that can refuse a dispatch:</i>
+
+"PreToolUse": [{
+  "matcher": "Agent",
+  "hooks": [{ "type": "command",
+              "if": "<u>Agent(developer)</u>",
+              "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/sequence-gate.sh" }]
+}]
+
+<i>and it is unbypassable — PreToolUse deny outranks every permission mode,</i>
+<i>including bypassPermissions and --dangerously-skip-permissions.</i></pre>
+        <div class="ev-body">
+          <p>The corrected shape is four hooks where you have two: arm a baseline at <code>SubagentStart</code>, verify red at <code>SubagentStop</code>, <strong>refuse the developer dispatch at <code>PreToolUse</code> on <code>Agent</code></strong>, verify green at <code>SubagentStop</code>. Only the third one is a sequencing gate. It is ~40 lines and it is the most valuable code in the rebuild.</p>
+        </div>
+      </div>
+
+      <div class="ev defect">
+        <div class="ev-head"><span class="chip defect">03 · Reproduced</span><span class="ev-title">A clean install can never go green — three permanent failures, all self-inflicted</span></div>
+        <div class="ev-body">
+          <p><strong>Check 13</strong> — the installer itself runs <code>approve.sh --init-key</code>, which writes a ledger line tagged <code>rule: "escalation-key-access"</code>. <code>check_done.py</code> reads <code>rule</code> from every ledger line without looking at <code>event</code>, and that rule is never-escalatable. Permanent: the ledger is append-only by design and <code>gc-prune.sh</code> explicitly refuses to rotate it. Rotating the key makes it worse — you then get a second failure for "escalated twice." <strong>No test covers it:</strong> <code>grep key_initialized test_hooks.py</code> returns nothing.</p>
+          <p><strong>Manifest scope</strong> — every file the installer wrote is uncommitted, so the first Stop reports all 47 harness files as outside the manifest. Alongside them: <code>uv.lock</code> and <code>__pycache__/*.pyc</code>, created seconds earlier <em>by the gate's own test run</em>, then reported as violations by the same invocation. The generated <code>.gitignore</code> covers <code>secrets/</code> and <code>.pipeline/</code> and has no entry for <code>__pycache__</code>, <code>*.pyc</code>, <code>uv.lock</code>, or <code>node_modules/</code> — the installer knows the stack and the gitignore generator never asks.</p>
+          <p><strong>The generic stack</strong> — <code>proof_map</code> returns SKIP with no collector, and <code>check_done.py</code> converts that skip into a hard FAIL. Every language without a pack, and every monorepo (which detects as generic), is non-shippable. The README says gates "skip with a loud notice rather than silently pass." They fail.</p>
+        </div>
+      </div>
+
+      <div class="ev defect">
+        <div class="ev-head"><span class="chip defect">04 · Reproduced</span><span class="ev-title">Every non-Python project silently runs pytest</span><span class="src">install.sh · ratchet.config.sh:208</span></div>
+        <div class="ev-body">
+          <p><code>ratchet.config.sh</code> selects the stack from <code>RATCHET_STACK</code>, else a <code>stack/active</code> marker, else <code>python-pytest</code>. <strong>Neither installer ever writes <code>stack/active</code></strong> — zero occurrences in <code>install.sh</code> and <code>install.ps1</code>. The detected stack goes into <code>settings.json._ratchet.stack</code> as metadata and into template substitution, and nothing the runtime reads.</p>
+        </div>
+<pre><i>real install into a node repo:</i>
+  settings.json._ratchet.stack = "node-jest"
+  .claude/hooks/stack/         = generic.sh  node-jest.sh  python-pytest.sh   <b>(no "active")</b>
+  runtime RATCHET_STACK        = <b>python-pytest</b>
+  runtime VERIFY_CMD           = <b>python3 -m pytest -q</b>
+  PIPELINE.md, same install    = "npx --no-install jest --ci (stack node-jest)"</pre>
+        <div class="ev-body">
+          <p>Not a loud fallback — <code>python-pytest.sh</code> exists on disk, so the generic-fallback notice never fires. The gate runs pytest in a JS repo, gets exit 4, and blocks the ship on a failure unrelated to the code. A one-line fix today; in the rebuild the whole indirection goes away.</p>
+        </div>
+      </div>
+
+      <div class="ev defect">
+        <div class="ev-head"><span class="chip defect">05 · Reproduced</span><span class="ev-title">The human's "sacred invariant" reaches zero of twelve agents</span><span class="src">install.sh:1676 vs _LAWS.md:54</span></div>
+        <div class="ev-body">
+          <p>The interview asks for domain laws 3–6, a review lens and a security pass. <code>_LAWS.md:54-63</code> specifies the substitution contract as <code>&lt;!-- DOMAIN_LAW_n --&gt;</code> markers. The installer's engine is <code>re.compile(r"\{\{([A-Z0-9_]+)\}\}")</code>. The two syntaxes never meet, so every agent ships the generic default.</p>
+          <p>Three layers of verification miss it. The human's prescribed check is <code>grep -rn "{{"</code>, which returns clean. The installer's own unresolved-marker warning uses the same regex. And <code>TestLawsAreIdenticalEverywhere</code> compares the twelve copies <em>to each other</em> — all twelve carry the same unsubstituted default, so they match and the suite is green. <strong>Six of seventeen interview prompts produce output no reader consumes</strong>, including <code>SECURITY_BOUNDARY_FILES</code>, which three separate documents describe as driving a Hard Stop.</p>
+        </div>
+      </div>
+
+      <div class="ev defect">
+        <div class="ev-head"><span class="chip defect">06 · Reproduced</span><span class="ev-title">Session start tests the harness against the live repo, reports it broken, then "heals" by breaking it further</span><span class="src">ratchet.config.sh:53,59</span></div>
+        <div class="ev-body">
+          <p><code>REPO_ROOT</code> is honoured from the environment and then exported. The test suite pins <code>CLAUDE_PROJECT_DIR</code> to a throwaway repo and documents that pin as the thing it guards — but <code>REPO_ROOT</code> outranks it. So <code>session-start.sh</code>'s smoke probe runs the gates against the real repo, writes <code>stop-retries</code> and <code>stop-lastfail</code> state into it, sees the real active run, and injects: <em>"The control layer is probing FAILED at session start."</em></p>
+          <p>Then it goes green. Not because anything was fixed — because the <code>stop-lastfail</code> file it just wrote makes the next probe hit the identical-failure path from finding 01, which exits 0. <strong>The availability monitor reports healthy precisely when the thing it monitors has given up.</strong></p>
+        </div>
+      </div>
+
+      <div class="ev">
+        <div class="ev-head"><span class="chip">07</span><span class="ev-title">There is no orchestrator</span></div>
+        <div class="ev-body">
+          <p>Twelve agent seats, and nothing drives them. No <code>.claude/commands/</code>, no skill, no dispatch table. The entry point is a prompt the installer prints and asks you to paste — and the installer prints a different prompt than <code>QUICKSTART.md</code> does. The pipeline's stage order, the seat assignments and the baseline calls are prose in <code>PIPELINE.md</code> addressed to whatever model happens to read it. This is the single biggest gap between what the docs describe and what exists, and it is also the easiest to close: it should be a skill.</p>
+        </div>
+      </div>
+
+      <div class="ev go">
+        <div class="ev-head"><span class="chip go">Credit where due</span><span class="ev-title">The deny list is the best-built artifact in the repository</span><span class="src">settings.template.json</span></div>
+        <div class="ev-body">
+          <p>78 entries. Every <code>Write()</code> path deny has an <code>Edit()</code> twin — the exact mistake most hand-written configs make, since Claude Code only consults <code>Edit()</code> and <code>Read()</code> path rules and silently ignores <code>Write()</code> ones. Correct force-push family coverage. A coherent, documented rationale for why the allow list deliberately permits things the guard then refuses.</p>
+          <p>Which is the whole argument for the rebuild: <strong>the 300 lines of JSON are right and the 4,008 lines of bash re-implementing them are wrong.</strong> Keep the JSON. (One real gap: four <code>Read()</code> denies have no <code>Edit()</code> twin, so <code>NotebookEdit</code> is not covered on those paths. Low severity, one-line fix.)</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="shead"><span class="snum">02</span><div class="col">
+      <h2>The architecture</h2>
+      <p class="lede">One decision removes most of the code: Ratchet is a Claude Code plugin plus a small stub committed to the repo. Not an installer.</p>
+    </div></div>
+
+    <div class="col">
+      <p>The platform now ships the distribution problem you spent 9,172 lines solving. A plugin carries hooks, subagent definitions, skills, MCP servers and executables; it installs from a marketplace, pins and bumps its own version, auto-updates in the background, and registers for a whole team from two keys in the repo's <code>settings.json</code>. No copy engine, no manifest, no checksum baseline, no rollback script, no updater, no PowerShell port.</p>
+    </div>
+
+    <div class="plate">
+      <div class="tw"><table>
+        <thead><tr><th>You hand-rolled</th><th>Size</th><th>The platform does it</th></tr></thead>
+        <tbody>
+          <tr><td>Copying <span class="f">.claude/</span> into a repo, versioning it, updating it, uninstalling it</td><td class="n">9,172 LOC</td><td>Plugin marketplace + <span class="f">extraKnownMarketplaces</span> / <span class="f">enabledPlugins</span></td></tr>
+          <tr><td>The orchestrator — a prompt the installer prints</td><td class="n">—</td><td>A skill. <span class="f">/ratchet:run M0</span>. Body loads on invoke and persists for the session.</td></tr>
+          <tr><td>Four near-identical critic seats</td><td class="n">5,718 w</td><td>One agent definition; the lens goes in the per-dispatch prompt</td></tr>
+          <tr><td>929-line doctrine <span class="f">@</span>-imported into every session</td><td class="n">56 KB</td><td>Skill body (on invoke) + <span class="f">.claude/rules/*.md</span> with <span class="f">paths:</span> (lazy) + CLAUDE.md under 200 lines (facts only)</td></tr>
+          <tr><td>Path, secret and push refusals in bash</td><td class="n">2,231 LOC</td><td><span class="f">deny[]</span> — first-match, no tokenizer to fool, unbypassable</td></tr>
+          <tr><td>A private test framework in 26 files plus a 5,191-line suite</td><td class="n">7,281 LOC</td><td>One normal test file</td></tr>
+          <tr><td>Dependency detection across eight package managers</td><td class="n">1,910 LOC</td><td>One README line per platform</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="col">
+      <h3>What a plugin cannot do — this is the whole remaining bootstrap</h3>
+      <ul class="tight">
+        <li><strong>Ship a permission surface.</strong> A plugin's <code>settings.json</code> supports exactly two keys, and neither is <code>permissions</code>. Deny rules must be a file in the repo. This is the one thing that still has to be written into a user's tree, and it is ~120 lines of JSON.</li>
+        <li><strong>Carry hooks on agent frontmatter.</strong> Plugin-shipped agents get <code>hooks</code>, <code>mcpServers</code> and <code>permissionMode</code> stripped. Keep gates in <code>hooks/hooks.json</code>, which survives plugin packaging — and note frontmatter hooks are silently dead in <code>claude -p</code> anyway, so the settings-style placement you already chose is the more robust one.</li>
+        <li><strong>Express deny-with-exceptions, state-dependent policy, or cross-tool sequencing.</strong> "Changed files must be a subset of the manifest" and "no developer dispatch before red" are not pattern matches. These are exactly the hooks that survive.</li>
+      </ul>
+
+      <h3>The hook set — six, each doing something <code>deny[]</code> provably cannot</h3>
+    </div>
+
+    <div class="plate">
+      <div class="tw"><table>
+        <thead><tr><th>Event · matcher</th><th>File</th><th>LOC</th><th>Why it can't be a deny rule</th></tr></thead>
+        <tbody>
+          <tr><td class="f">PreToolUse · Bash</td><td class="f">guard.sh</td><td class="n">~80</td><td>Project-specific forbidden tokens. Content-shaped, not path-shaped. Everything path- or push-shaped moves to <span class="f">deny[]</span>, where it is stricter.</td></tr>
+          <tr><td class="f">PreToolUse · Edit|Write</td><td class="f">scope-guard.sh</td><td class="n">~70</td><td>Changed files ⊆ manifest. Depends on run state.</td></tr>
+          <tr><td class="f">PreToolUse · Agent</td><td class="f new">sequence-gate.sh</td><td class="n">~40</td><td><b>New.</b> Refuses the developer dispatch without a red token. The only point that can refuse a dispatch.</td></tr>
+          <tr><td class="f">SubagentStop · test-writer|developer</td><td class="f">work-gate.sh</td><td class="n">~90</td><td>Runs a suite and inspects the result. One file, <span class="f">--mode red|green</span> — replaces two files at 68% overlap.</td></tr>
+          <tr><td class="f">Stop</td><td class="f">stop-gate.sh</td><td class="n">~90</td><td>Runs verify, checks scope, blocks with the failure text. <b>Never exits 0 while done is unmet.</b></td></tr>
+          <tr><td class="f">SessionStart</td><td class="f">session-start.sh</td><td class="n">~35</td><td>Banner plus <span class="f">head -n</span> on two files. No self-test probe.</td></tr>
+          <tr><td>—</td><td class="f">run.sh · stack/&lt;lang&gt;.sh</td><td class="n">~75</td><td>Run marker lifecycle; four command variables per language.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="col">
+      <p class="claim">Six hooks, ~480 lines. Every one of them does something the permission system cannot express. That is the test for whether a hook deserves to exist.</p>
+    </div>
+
+    <div class="plate">
+      <div class="shape">
+<pre><i># the plugin — versioned, auto-updating, nothing copied into user repos</i>
+<b>ratchet/</b>
+  .claude-plugin/plugin.json
+  <b>hooks/</b>hooks.json + 6 scripts        <em>~480 LOC total</em>
+  <b>agents/</b>                             <i>6 definitions × ~250 words</i>
+    scout · researcher · architect · test-writer · developer · critic
+  <b>skills/</b>
+    ratchet-run/SKILL.md               <u>the orchestrator — /ratchet:run M0</u>
+    ratchet-contract/SKILL.md          <i>interview the human, draft CONTRACT.md</i>
+  <b>DOCTRINE.md</b>                        <i>~1,200 words. rationale lives in WHY.md, off the prompt path</i>
+
+<i># the stub — what actually lands in a user's repo</i>
+<b>.claude/settings.json</b>                 <i>~120 lines: permissions + 2 plugin keys</i>
+<b>.context/CONTRACT.md</b>                  <i>the human's one file</i>
+<b>.pipeline/</b>                            <i>gitignored scratch</i>
+<b>.gitignore</b>                            <i>+6 lines, stack-aware</i></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="shead"><span class="snum">03</span><div class="col">
+      <h2>The contract</h2>
+      <p class="lede">The WIN row is a good idea implemented as a comment. Nothing runs it.</p>
+    </div></div>
+
+    <div class="col">
+      <p>The doctrine says every WIN row is <em>"script-decidable: it has a verify command that exits 0 or non-zero, and a human never adjudicates it."</em> Here is the complete enforcement of that sentence, and it is the only line in the codebase that reads a verify cell:</p>
+    </div>
+
+    <div class="plate">
+      <div class="ev defect">
+        <div class="ev-head"><span class="chip defect">Reproduced</span><span class="ev-title">The verify command is a string in a table that no process ever executes</span><span class="src">check_done.py:711</span></div>
+<pre>for r in rows:
+    v = r["verify"].strip().strip("`")
+    if not v or v in ("-", "n/a", "TBD"):
+        problems.append("%s has no verify command ...")
+
+<i>so these both PASS:</i>
+  | WIN-M1-01 | ... | <b>review the logs and confirm</b> | ... |   <i>← TEMPLATE.md's own example of an INVALID row</i>
+  | WIN-M1-02 | ... | <b>false</b>                       | ... |
+
+<i>and the evidence file is checked harder than the command:</i>
+  exists · non-empty · git-tracked — but never compared to any command's output.
+  echo "PASS - looks good to me" &gt; docs/evidence/M0/win.txt   <i>← satisfies it</i></pre>
+        <div class="ev-body">
+          <p>Two more breaks in the same chain. The Requirements column is never extracted — <code>cells[2]</code> is not read, and no code resolves a <code>REQ-</code> id against anything. And the real WIN→test binding lives in <code>.pipeline/contracts.md</code>, written by the architect, in <em>agent scratch</em>, reconciled against the human's <code>MILESTONES.md</code> by nothing. A row present in the human's file and absent from the agent's table passes with zero tests, and the gate prints ">=1 test per row" while covering fewer.</p>
+          <p>The incentive that creates is the worst part: a row that resists testing is best handled by dropping it from the agent-written table, where it silently passes.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <h3>Two inversions fix it</h3>
+      <ol class="rank">
+        <li><strong>The harness runs the command and writes the evidence.</strong> Today the agent writes its own evidence and nothing runs the command. Reverse both: the gate executes <code>run</code>, captures stdout/stderr/exit into <code>evidence</code>, and the row is green if and only if exit is 0. Evidence becomes script-written, which is the rule the harness already applies to checkpoint evidence — where it matters less.</li>
+        <li><strong>The selector moves into the human's file.</strong> One list, one owner, one file. The reconciliation hole closes by not existing.</li>
+      </ol>
+
+      <p>One file, <code>.context/CONTRACT.md</code>, shipped with the headers and a worked row already in place — not a pointer to a 4,473-word guide:</p>
+    </div>
+
+    <div class="plate">
+      <div class="shape">
+<pre><b># CONTRACT — acme-invoices</b>
+verify:      make verify          <i># whole-suite gate; must exit 0 before any ship</i>
+base_branch: main
+
+<b>## Never</b>                          <i># the domain wall guard.sh enforces</i>
+exec:     --prod, stripe charge, npm publish
+artifact: LIVE_CONFIRMED
+
+<b>## Requirements</b>
+| id | the system MUST | falsified by |
+| REQ-CFG-01 | reject an unknown config key with a non-zero exit | `nope = 1` starts fine |
+| REQ-MON-01 | hold every amount as integer minor units | a float reaches Ledger.post() |
+
+<b>## M0 — configuration spine</b>
+| win | name | proves | run | selects | evidence |
+| WIN-M0-01 | config-rejects-unknown-key | REQ-CFG-01 | `make win-m0-01` | `tests/test_config.py -k unknown_key` | docs/evidence/M0/01.txt |
+| WIN-M0-02 | no-float-in-money-path     | REQ-MON-01 | `make win-m0-02` | <u>—</u>                                 | docs/evidence/M0/02.txt |</pre>
+      </div>
+    </div>
+
+    <div class="col">
+      <p>Every field gets a named reader: <code>run</code> is executed by the gate, <code>selects</code> feeds the proof map, <code>proves</code> is resolved bidirectionally against the requirement table, <code>evidence</code> is written by the harness. <code>selects: —</code> is deliberate: it marks a row proved by its exit code alone, which fixes a live contradiction where the doctrine calls grep rows <em>"the best WIN rows there are"</em> and the proof map fails any row collecting zero tests. <strong>The quickstart's own worked M0 currently cannot pass the ship gate for exactly this reason.</strong></p>
+      <p>And <code>SPEC.md</code>'s fourteen mandatory sections become <code>docs/design.md</code>, unenforced and optional, because no code has ever read any of them.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="shead"><span class="snum">04</span><div class="col">
+      <h2>The plan</h2>
+      <p class="lede">Five phases, about a week. Every exit criterion is a command, not a document — if a phase can be completed by writing prose, it is the wrong phase.</p>
+    </div></div>
+
+    <div class="plate">
+
+      <div class="phase">
+        <div class="pnum">0</div>
+        <div class="ptitle">Prove the mechanism <span class="pcost">1 day · before deleting anything</span></div>
+        <div class="pbody">
+          <p>A throwaway repo, four hooks written from scratch, no doctrine, no seats, no ceremony. The point is to answer the questions the platform docs do not, because finding 02 shows the current design was built on an assumption nobody tested.</p>
+          <ul class="tight">
+            <li>What field in the <code>Agent</code> tool's <code>tool_input</code> names the target subagent? (Undocumented — dump stdin from a no-op hook under <code>claude --debug</code>.)</li>
+            <li>Does <code>if: "Agent(developer)"</code> actually filter? It composes two documented facts but is never shown together in the docs. Re-check <code>tool_input</code> inside the script regardless — <code>if</code> is best-effort.</li>
+            <li>Does <code>SubagentStop</code> fire for a subagent that errors or is interrupted? If not, a stale red token can outlive an aborted test-writer — timestamp it and expire it.</li>
+            <li>Do the <code>SubagentStop</code> matchers fire under <code>claude -p</code>?</li>
+          </ul>
+        </div>
+        <div class="exit"><b>Exit criterion</b>a two-row milestone closes and opens a PR in a scratch repo, driven by the skill. not a document — a PR.</div>
+      </div>
+
+      <div class="phase">
+        <div class="pnum">1</div>
+        <div class="ptitle">Delete <span class="pcost">half a day · no new code</span></div>
+        <div class="pbody">
+          <p>Pure subtraction, in one commit, so the diff is legible. Nothing here is rewritten yet — the tree is allowed to be broken at the end of this phase, because it does not currently work anyway.</p>
+        </div>
+        <div class="plate" style="margin:.8rem 0 0">
+          <div class="tw" style="margin:0"><table>
+            <thead><tr><th>Delete</th><th>Size</th></tr></thead>
+            <tbody>
+              <tr><td>All PowerShell — requires bash 4+ to run, so the population is provably empty</td><td class="cut">−4,496</td></tr>
+              <tr><td><span class="f">escalation-lib.sh · approve.sh · escalate.sh · esc_payload.py</span> — and finding 03's check-13 poisoning goes with them</td><td class="cut">−3,199</td></tr>
+              <tr><td><span class="f">ratchet-update.sh</span> — hand-rolled <span class="f">git diff/status/checkout</span> inside a verified git repo</td><td class="cut">−1,477</td></tr>
+              <tr><td><span class="f">ratchet-dependencies.sh</span> — four tools, one README line per platform</td><td class="cut">−1,009</td></tr>
+              <tr><td><span class="f">install.sh</span> — 304 lines of terminal graphics, 186 of copying</td><td class="cut">−2,190</td></tr>
+              <tr><td>Embedded <span class="f">--selftest</span> blocks in 26 files</td><td class="cut">−2,090</td></tr>
+              <tr><td><span class="f">run_metrics.py · proof_map.py · check_narrative.py</span> — proof_map returns in phase 3 reading CONTRACT.md</td><td class="cut">−2,747</td></tr>
+              <tr><td>17 of 19 <span class="f">check_done.py</span> checks — they audit paperwork; two survive into the Stop gate</td><td class="cut">−1,600</td></tr>
+              <tr><td><span class="f">docs/*.md · BUILD-NOTES.md</span> — eleven reports on states of the tree that no longer exist</td><td class="cut">−27,174 w</td></tr>
+              <tr><td>Learning-loop scaffolding — 10,460 words holding 585, all imported from another project</td><td class="cut">−6,589 w</td></tr>
+              <tr><td>Six of twelve agent seats; every <span class="f">## Failure modes</span> and <span class="f">## Who checks you</span> section; <span class="f">_LAWS.md</span>'s essay</td><td class="cut">−12,000 w</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <div class="exit"><b>Exit criterion</b>git diff --stat shows roughly −33,000 lines and −46,000 words in one commit.</div>
+      </div>
+
+      <div class="phase">
+        <div class="pnum">2</div>
+        <div class="ptitle">Rebuild the six hooks <span class="pcost">2 days</span></div>
+        <div class="pbody">
+          <p>Write them fresh against the phase-0 spike rather than editing the survivors — <code>guard.sh</code> and <code>scope-guard.sh</code> are the two best-built files in the repo, and they are still 1,160 lines of a job that is now ~150 once the path and push rules move to <code>deny[]</code>.</p>
+          <ul class="tight">
+            <li>Move every path-, secret- and push-shaped rule into <code>deny[]</code>. Add the four missing <code>Edit()</code> twins.</li>
+            <li>Delete <code>MAX_STOP_RETRIES</code> entirely. A terminal gate never exits 0 while done is unmet; the platform's own eight-block cap is the backstop.</li>
+            <li>One state anchor, resolved from <code>CLAUDE_PROJECT_DIR</code> and never inherited from the environment — finding 06 is caused by an exported <code>REPO_ROOT</code> outranking the resolver.</li>
+            <li>Stack packs: four variables, bound by a file the bootstrap actually writes. Drop <code>SECRETS_SCAN_CMD</code> and <code>DEP_AUDIT_CMD</code> — no gate has ever executed them.</li>
+            <li>One test file that drives the six hooks with real payloads. It does not test the naming regex against itself.</li>
+          </ul>
+        </div>
+        <div class="exit"><b>Exit criterion</b>a fresh install of the six hooks passes check_done on a clean repo. today three failures make that unreachable.</div>
+      </div>
+
+      <div class="phase">
+        <div class="pnum">3</div>
+        <div class="ptitle">Contract and prompts <span class="pcost">1 day</span></div>
+        <div class="pbody">
+          <ul class="tight">
+            <li><code>CONTRACT.md</code> replaces <code>SPEC.md</code> + <code>MILESTONES.md</code>, shipped with headers and a worked row in place.</li>
+            <li>The gate runs each <code>run</code> command and writes its own evidence.</li>
+            <li><code>proof_map.py</code> returns, reading <code>CONTRACT.md</code> instead of agent scratch, with the per-row <code>selects: —</code> exemption.</li>
+            <li>Six agent prompts at ~250 words. The critic is one definition dispatched with a lens in the task message.</li>
+            <li><code>ratchet-run</code> and <code>ratchet-contract</code> skills — the orchestrator becomes a real artifact instead of a printed paste.</li>
+            <li>Delete <code>DEC-001</code>, which ships a fabricated <code>Simulated.</code> line that satisfies the check written to reject fabricated <code>Simulated.</code> lines.</li>
+          </ul>
+        </div>
+        <div class="exit"><b>Exit criterion</b>/ratchet:run M0 closes the reference milestone end to end in a real project and opens a PR you would merge.</div>
+      </div>
+
+      <div class="phase">
+        <div class="pnum">4</div>
+        <div class="ptitle">Package as a plugin <span class="pcost">1 day</span></div>
+        <div class="pbody">
+          <p>Marketplace manifest, version pin, <code>claude plugin validate --strict</code>. The bootstrap shrinks to writing three things into a repo: <code>settings.json</code>, <code>CONTRACT.md</code>, and six <code>.gitignore</code> lines. That is a ~30-line script, or a documented copy-paste, and either is defensible.</p>
+        </div>
+        <div class="exit"><b>Exit criterion</b>a teammate gets the harness by cloning the repo and trusting the folder. no installer is run.</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="shead"><span class="snum">05</span><div class="col">
+      <h2>Decisions, so nobody relitigates them</h2>
+    </div></div>
+
+    <div class="plate">
+      <div class="tw"><table>
+        <thead><tr><th>Decision</th><th>Because</th><th>Rejected</th></tr></thead>
+        <tbody>
+          <tr><td>Ship as a plugin; the repo gets a stub</td><td>Distribution, versioning and updates are solved. A plugin cannot ship permissions, so the stub is irreducible and small.</td><td>Vendoring <span class="f">.claude/</span> per repo — that is the 9,172 lines</td></tr>
+          <tr><td>Permissions are the security model; hooks are the exceptions</td><td><span class="f">deny[]</span> is first-match, unbypassable, and has no tokenizer to fool. Fifteen measured bypasses say the bash copy is worse.</td><td>Defence in depth — the second layer is the one that leaked</td></tr>
+          <tr><td>A hook must do something <span class="f">deny[]</span> cannot express</td><td>A crisp, checkable test for whether new hook code deserves to exist</td><td>"Belt and braces"</td></tr>
+          <tr><td>Sequencing lives at <span class="f">PreToolUse · Agent</span></td><td>The only lifecycle point that can refuse a dispatch. <span class="f">SubagentStop</span> can only send the finishing agent back.</td><td>The current two-gate design, which does not enforce ordering at all</td></tr>
+          <tr><td>The gate runs verify commands and writes evidence</td><td>An agent that writes its own evidence is not evidence. Today nothing runs the command.</td><td>Trusting the agent's evidence file, checked only for non-emptiness</td></tr>
+          <tr><td>No approval protocol. The agent prints the command; the human runs it.</td><td>The human is at the terminal. Six cryptographic mechanisms secured one keystroke and broke the ship gate permanently.</td><td>HMAC + TTL + run-binding + single-use × 2 + postcondition</td></tr>
+          <tr><td>One critic definition, N dispatches</td><td>The harness's own rule: independence is a fresh context, not a separate file</td><td>Four seats at 5,718 words</td></tr>
+          <tr><td>The orchestrator is a skill</td><td>A versioned artifact with a name, loaded on invoke. Today it is a printed paste that disagrees with the quickstart.</td><td>Prose in <span class="f">PIPELINE.md</span> addressed to whoever reads it</td></tr>
+          <tr><td>Bash-only. No PowerShell.</td><td><span class="f">install.ps1</span> hard-requires bash 4+, so it serves an empty population — and has already drifted in 13 measured ways</td><td>Cross-platform parity, which was never parity</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="shead"><span class="snum">06</span><div class="col">
+      <h2>The brake</h2>
+      <p class="lede">Cutting is the easy half. Without a mechanical brake this re-inflates in a fortnight, because the pressure that produced it is still there.</p>
+    </div></div>
+
+    <div class="col">
+      <p>The teardown's thesis was that the system pays the agent in documents. That does not change by deleting documents — it changes by changing what scores. Five rules, all checkable:</p>
+
+      <ol class="rank">
+        <li><strong>No markdown ships without a code reader.</strong> If no hook parses it, it is a comment, and comments live next to the code they explain. This single rule deletes <code>gap-analysis.md</code>, <code>contracts.md</code>, <code>context.md</code>, <code>research.md</code>, the FAST checkpoints and the recap before anyone argues about them.</li>
+        <li><strong>A gate asserts a command's exit code, never a file's existence.</strong> Every check that currently passes because a file exists — or because its last line reads <code>CLEAR</code> — is deleted or converted. A check that cannot fail is not a check.</li>
+        <li><strong>Done is a green verify and a merged PR.</strong> Not a filed retro, not a consolidated lessons document, not nineteen passing paperwork audits.</li>
+        <li><strong>One statement, one home.</strong> A rule stated twice will drift. The eight mutually incompatible test counts across the shipped docs — three of them in <code>BUILD-NOTES.md</code> alone — are that principle failing in public.</li>
+        <li><strong>A budget, enforced at review.</strong> Hooks ≤ 800 LOC. Prompts ≤ 2,500 words. One README. Exceeding any of them is a design conversation, not a commit.</li>
+      </ol>
+
+      <p class="claim red">The agent will produce whatever you score. Score commands.</p>
+
+      <p>And one process rule for the rebuild itself: <strong>do not let the harness audit the harness again.</strong> Four accurate self-diagnoses became four more documents in <code>docs/</code> and nothing changed. The next assessment of whether this works is a milestone closing, not a report saying it would.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap col">
+    <p class="kicker">The judgment was never the problem.</p>
+    <p><code>red-gate.sh</code> is a genuinely good control and rare to see done properly. The deny list is better-built than most hand-written permission configs I've read. "A WIN row without a verify command is a setup defect, not a judgment call" is the sharpest sentence in 80,250 words. The ownership partition is correct. Somebody here knows what they are doing.</p>
+    <p>What went wrong is that nothing in the loop could say <em>no</em>. Every gate passed on a file existing, so the only available signal was <em>more</em> — and three days of more is 34,000 lines, twelve seats, an HMAC, and zero delivered milestones. Put one mechanism in place that can return failure, and the same judgment produces a tenth of the code.</p>
+    <p style="margin-top:2rem">Delete first. Write each phase's exit criterion as a command before you start it. Then run M0 — and this time let it fail.</p>
+    <p style="margin-top:2.4rem;padding-top:1.2rem;border-top:1px solid var(--rule);font-size:.8rem;font-family:'IBM Plex Mono',monospace;line-height:1.7">Findings 01–06 reproduced against the working tree, 2026-08-23, including a full 210-test suite run (203 pass / 7 skip — only BUILD-NOTES.md:67 of eight shipped claims is correct) and a cold install into a scratch repo. Platform capabilities verified against code.claude.com. Four items in phase 0 are undocumented and must be tested, not assumed.<br><br>This plan is ~2,900 words. It is not a docs/ artifact.</p>
+  </div>
+</footer>
+
+</main>
