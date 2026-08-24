@@ -53,7 +53,7 @@ set -uo pipefail
 # NOT set -e. A failed optional step must be REPORTED, not silently abort a
 # half-finished install. Every step that matters checks its own exit status.
 
-RT_INSTALLER_VERSION="1.2.2"
+RT_INSTALLER_VERSION="1.2.3"
 # Install verification tier:
 #   install (DEFAULT, ~0.5s) - install-verify.sh: did the deployment land, and do
 #                              the gates work ON THIS MACHINE. This is the question

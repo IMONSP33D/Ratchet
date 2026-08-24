@@ -6,7 +6,7 @@
 
 *The run moves forward or it stops. It never quietly slides back.*
 
-<sub>v1.2.2 · bash + Python, stdlib only · GitHub-only ship flow</sub>
+<sub>v1.2.3 · bash + Python, stdlib only · GitHub-only ship flow</sub>
 
 </div>
 
@@ -78,10 +78,9 @@ then agrees with it.
 
 Two of those four are things the agent *cannot* write. That is the harness.
 
-> **One exception inside `.pipeline/`.** The
-> dispatch store (`.pipeline/dispatch/`) are denied to the agent even though they sit in its own
-> scratch. An approval means nothing if the agent can edit the ledger it is recorded in, and a
-> partition glob means nothing if the agent can widen it. It is permanently refused.
+> **One exception inside `.pipeline/`.** The dispatch store (`.pipeline/dispatch/`) is denied to the
+> agent even though it sits in the agent's own scratch: it holds the partition glob that defines
+> where this dispatch may write, and a lane the agent can widen is not a lane.
 
 ---
 
@@ -101,7 +100,7 @@ hooks, and each is a real process with a real exit code:
 | `stop-gate.sh` | when the agent tries to end its turn | The definition of done. Tiered: inert with no run, fast checks mid-run, the full deterministic gate at ship tier. Caps retries; refuses a second identical attempt. |
 | `notify.sh` | on notification | Pages your webhook when a run stops for a decision. |
 
-Plus four Python checkers the gates call:
+Plus three Python checkers the gates call:
 
 - **`check_done.py`** — the definition of done: two load-bearing checks (changed files subset of the
   manifest; the verify-gate artifact matches HEAD and exited 0), each with a driven failure input. Cut
@@ -109,7 +108,6 @@ Plus four Python checkers the gates call:
   code.
 - **`proof_map.py`** — derives which tests cover which WIN row
 - **`run_metrics.py`** — the mechanical record the retro reads: counters, cross-counter contradictions, and where the run's time went
-- **`esc_payload.py`** — derives the sha256 an approval binds to
 
 **Fail closed.** A gate that cannot determine safety blocks. A gate whose dependency is missing
 blocks. There is no "warn and continue" path in a security decision — which is why the ship gate
