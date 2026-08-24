@@ -1558,6 +1558,38 @@ else
   ok ".pipeline/ partition already present in .gitignore"
 fi
 
+# --- .gitattributes: pin the executable harness to LF ----------------------
+# QUICKSTART's Windows guidance promises this pin exists. Without it, any
+# collaborator cloning this repo with core.autocrlf=true (the Git-for-Windows
+# default) checks out every hook with CRLF line endings, and bash dies on the
+# shebang of every gate with "bad interpreter: /usr/bin/env bash^M" -- on a
+# machine that was never the install machine. The pin makes the harness's
+# line endings a property of the REPO, not of whoever cloned it last.
+GITATTR="$TARGET/.gitattributes"
+ensure_attr() { # ensure_attr <line>
+  if [ -f "$GITATTR" ] && grep -qxF "$1" "$GITATTR" 2>/dev/null; then return 0; fi
+  if [ "$DRY_RUN" = "1" ]; then dry "append to .gitattributes: $1"; return 0; fi
+  { [ -s "$GITATTR" ] && [ -n "$(tail -c 1 "$GITATTR" 2>/dev/null)" ] && printf '\n'; } >> "$GITATTR" 2>/dev/null
+  printf '%s\n' "$1" >> "$GITATTR"
+}
+if [ "$DRY_RUN" != "1" ] && [ ! -f "$GITATTR" ]; then
+  : > "$GITATTR" && record "F .gitattributes"
+fi
+ensure_attr "# --- Ratchet: bash executes these; CRLF on a shebang kills every gate ---"
+ensure_attr ".claude/hooks/** text eol=lf"
+ensure_attr ".claude/agents/** text eol=lf"
+ensure_attr ".claude/doctrine/** text eol=lf"
+if [ "$DRY_RUN" != "1" ]; then
+  ATTR_GOT="$(git -C "$TARGET" check-attr eol -- .claude/hooks/hooklib.sh 2>/dev/null | awk '{print $NF}')"
+  if [ "$ATTR_GOT" = "lf" ]; then
+    ok "verified: .claude/** is pinned to LF (.gitattributes)"
+  else
+    warn "could not verify the LF pin (git check-attr said '${ATTR_GOT:-nothing}')."
+    say "        A collaborator cloning with core.autocrlf=true may get CRLF hooks;"
+    say "        see QUICKSTART's 'bad interpreter' note for the recovery commands."
+  fi
+fi
+
 # --- VERIFY, do not assume, that secrets/ is actually ignored --------------
 # "We appended a line to .gitignore" is not the same claim as "git will not
 # commit this file". A parent .gitignore, a global core.excludesFile, a
